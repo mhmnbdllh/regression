@@ -470,7 +470,7 @@ def main():
     st.markdown("""
     <div style="padding:1.5rem 0 0.5rem 0;">
         <div class="main-title">Regression Analyzer</div>
-        <div class="main-subtitle">SPSS-equivalent Simple &amp; Multiple Linear Regression · Automatic assumption tests · Downloadable Word report</div>
+        <div class="main-subtitle">SPSS-equivalent Simple &amp; Multiple Linear Regression by Muhaimin Abdullah</div>
     </div><hr class="divider">""", unsafe_allow_html=True)
 
     # Step 1
