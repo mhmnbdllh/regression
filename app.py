@@ -1,1598 +1,863 @@
 """
 Statistical Regression Analysis App
 Simple & Multiple Linear Regression — SPSS-equivalent output
+
+Fixes applied:
+  1. KS normality test now uses Lilliefors correction (statsmodels) — matches SPSS exactly
+  2. Glejser KeyError fixed — use .iloc[] instead of integer index on params Series
+  3. Theme switched to clean light theme for full readability
 """
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 from scipy import stats
-from scipy.stats import shapiro, kstest, norm
+from scipy.stats import shapiro, norm
+from statsmodels.stats.diagnostic import lilliefors
 import statsmodels.api as sm
 from statsmodels.stats.stattools import durbin_watson
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-import seaborn as sns
 from io import BytesIO
 import warnings
 warnings.filterwarnings("ignore")
 
-# ─── Page config ──────────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="Regression Analyzer",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
+st.set_page_config(page_title="Regression Analyzer", page_icon="📊",
+                   layout="wide", initial_sidebar_state="collapsed")
 
-# ─── Custom CSS ───────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap');
-
-html, body, [class*="css"] {
-    font-family: 'DM Sans', sans-serif;
-}
-
-/* Background */
-.stApp {
-    background: #0f1117;
-    color: #e8e8e8;
-}
-
-/* Main header */
-.main-title {
-    font-family: 'DM Serif Display', serif;
-    font-size: 3.2rem;
-    color: #f0e6d3;
-    letter-spacing: -1px;
-    line-height: 1.1;
-    margin-bottom: 0.2rem;
-}
-.main-subtitle {
-    font-family: 'DM Sans', sans-serif;
-    font-weight: 300;
-    color: #8a8a9a;
-    font-size: 1.05rem;
-    margin-bottom: 2rem;
-}
-
-/* Cards */
-.stat-card {
-    background: #1a1d27;
-    border: 1px solid #2a2d3a;
-    border-radius: 12px;
-    padding: 1.5rem;
-    margin-bottom: 1rem;
-}
-.stat-card h4 {
-    font-family: 'DM Serif Display', serif;
-    color: #c9b99a;
-    font-size: 1.1rem;
-    margin-bottom: 0.8rem;
-}
-
-/* Step indicator */
-.step-badge {
-    display: inline-block;
-    background: #c9b99a22;
-    border: 1px solid #c9b99a44;
-    color: #c9b99a;
-    font-family: 'DM Mono', monospace;
-    font-size: 0.75rem;
-    padding: 0.2rem 0.7rem;
-    border-radius: 20px;
-    margin-bottom: 0.5rem;
-    letter-spacing: 1px;
-    text-transform: uppercase;
-}
-
-/* Pass/Fail badges */
-.badge-pass {
-    background: #1a3a2a;
-    border: 1px solid #2a6a4a;
-    color: #4ade80;
-    padding: 0.25rem 0.8rem;
-    border-radius: 20px;
-    font-size: 0.85rem;
-    font-weight: 600;
-    display: inline-block;
-}
-.badge-fail {
-    background: #3a1a1a;
-    border: 1px solid #6a2a2a;
-    color: #f87171;
-    padding: 0.25rem 0.8rem;
-    border-radius: 20px;
-    font-size: 0.85rem;
-    font-weight: 600;
-    display: inline-block;
-}
-.badge-warn {
-    background: #3a2f1a;
-    border: 1px solid #6a5a2a;
-    color: #fbbf24;
-    padding: 0.25rem 0.8rem;
-    border-radius: 20px;
-    font-size: 0.85rem;
-    font-weight: 600;
-    display: inline-block;
-}
-
-/* Result value display */
-.result-value {
-    font-family: 'DM Mono', monospace;
-    font-size: 1.8rem;
-    color: #f0e6d3;
-    font-weight: 500;
-}
-.result-label {
-    font-size: 0.78rem;
-    color: #6a6a7a;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-}
-
-/* Table styling */
-.dataframe {
-    font-family: 'DM Mono', monospace !important;
-    font-size: 0.85rem !important;
-}
-
-/* Section headers */
-.section-header {
-    font-family: 'DM Serif Display', serif;
-    font-size: 1.6rem;
-    color: #f0e6d3;
-    border-bottom: 1px solid #2a2d3a;
-    padding-bottom: 0.5rem;
-    margin: 1.5rem 0 1rem 0;
-}
-
-/* Interpretation box */
-.interp-box {
-    background: #12151f;
-    border-left: 3px solid #c9b99a;
-    padding: 1rem 1.2rem;
-    border-radius: 0 8px 8px 0;
-    margin: 0.8rem 0;
-    font-size: 0.92rem;
-    color: #c8c8d8;
-    line-height: 1.7;
-}
-
-/* Equation display */
-.equation-box {
-    background: #12151f;
-    border: 1px solid #c9b99a44;
-    border-radius: 10px;
-    padding: 1.2rem 1.5rem;
-    font-family: 'DM Mono', monospace;
-    font-size: 1.2rem;
-    color: #c9b99a;
-    text-align: center;
-    margin: 1rem 0;
-    letter-spacing: 0.5px;
-}
-
-/* Recommendation box */
-.rec-box {
-    background: #1a1f35;
-    border: 1px solid #3a4a7a;
-    border-radius: 10px;
-    padding: 1rem 1.2rem;
-    margin: 0.5rem 0;
-    color: #a0b4e8;
-    font-size: 0.9rem;
-}
-
-/* Divider */
-.divider {
-    border: none;
-    border-top: 1px solid #2a2d3a;
-    margin: 1.5rem 0;
-}
-
-/* Button override */
-.stButton > button {
-    background: #c9b99a !important;
-    color: #0f1117 !important;
+html, body, [class*="css"], .stApp {
     font-family: 'DM Sans', sans-serif !important;
-    font-weight: 600 !important;
-    border: none !important;
-    border-radius: 8px !important;
-    padding: 0.5rem 1.5rem !important;
-    transition: all 0.2s !important;
+    background-color: #f8f7f4 !important;
+    color: #1a1a2e !important;
 }
-.stButton > button:hover {
-    background: #e0d0b8 !important;
-    transform: translateY(-1px) !important;
-}
-
-/* Select box */
-.stSelectbox label, .stMultiSelect label {
-    color: #8a8a9a !important;
-    font-size: 0.85rem !important;
-}
-
-/* Upload area */
-.stFileUploader {
-    border: 2px dashed #2a2d3a !important;
-    border-radius: 12px !important;
-    padding: 1rem !important;
-}
-
-/* Radio */
-.stRadio label {
-    color: #c8c8d8 !important;
-}
-
-/* Metric */
-[data-testid="metric-container"] {
-    background: #1a1d27;
-    border: 1px solid #2a2d3a;
-    border-radius: 10px;
-    padding: 0.8rem 1rem;
-}
-[data-testid="metric-container"] label {
-    color: #6a6a7a !important;
-    font-size: 0.78rem !important;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-}
-[data-testid="metric-container"] [data-testid="metric-value"] {
-    font-family: 'DM Mono', monospace !important;
-    color: #f0e6d3 !important;
-}
+.main-title { font-family:'DM Serif Display',serif; font-size:2.8rem; color:#1a1a2e; letter-spacing:-1px; line-height:1.1; margin-bottom:0.2rem; }
+.main-subtitle { font-weight:400; color:#5a5a7a; font-size:1rem; margin-bottom:1.5rem; }
+.step-badge { display:inline-block; background:#e8e2d8; border:1px solid #c9b99a; color:#7a6a50; font-family:'DM Mono',monospace; font-size:0.72rem; padding:0.18rem 0.7rem; border-radius:20px; margin-bottom:0.4rem; letter-spacing:1.5px; text-transform:uppercase; }
+.section-header { font-family:'DM Serif Display',serif; font-size:1.5rem; color:#1a1a2e; border-bottom:2px solid #c9b99a; padding-bottom:0.4rem; margin:1.2rem 0 0.8rem 0; }
+.interp-box { background:#ffffff; border-left:4px solid #b5965a; padding:1rem 1.3rem; border-radius:0 8px 8px 0; margin:0.8rem 0; font-size:0.93rem; color:#2a2a3e; line-height:1.75; box-shadow:0 1px 4px rgba(0,0,0,0.06); }
+.badge-pass { background:#e8f5e9; border:1.5px solid #66bb6a; color:#2e7d32; padding:0.3rem 1rem; border-radius:20px; font-size:0.85rem; font-weight:700; display:inline-block; margin:0.4rem 0; }
+.badge-fail { background:#fdecea; border:1.5px solid #ef5350; color:#c62828; padding:0.3rem 1rem; border-radius:20px; font-size:0.85rem; font-weight:700; display:inline-block; margin:0.4rem 0; }
+.equation-box { background:#fffdf7; border:1.5px solid #c9b99a; border-radius:10px; padding:1.1rem 1.5rem; font-family:'DM Mono',monospace; font-size:1.15rem; color:#1a1a2e; text-align:center; margin:1rem 0; box-shadow:0 1px 4px rgba(0,0,0,0.05); }
+.divider { border:none; border-top:1px solid #ddd8ce; margin:1.5rem 0; }
+[data-testid="metric-container"] { background:#ffffff; border:1px solid #e0d8cc; border-radius:10px; padding:0.8rem 1rem; box-shadow:0 1px 3px rgba(0,0,0,0.05); }
+[data-testid="metric-container"] label { color:#6a6a8a !important; font-size:0.76rem !important; text-transform:uppercase; letter-spacing:0.8px; }
+[data-testid="metric-container"] [data-testid="metric-value"] { font-family:'DM Mono',monospace !important; color:#1a1a2e !important; font-size:1.3rem !important; }
+.stRadio label { color:#2a2a3e !important; }
+.stSelectbox label, .stMultiSelect label { color:#5a5a7a !important; font-size:0.85rem !important; }
+h3 { color:#1a1a2e !important; font-size:1.15rem !important; font-weight:600 !important; }
+h4 { color:#2a2a3e !important; }
+.stDownloadButton > button { background:#1a1a2e !important; color:#f8f7f4 !important; font-weight:600 !important; border:none !important; border-radius:8px !important; padding:0.55rem 1.5rem !important; }
+.stDownloadButton > button:hover { background:#2e2e50 !important; }
 </style>
 """, unsafe_allow_html=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# STATISTICAL FUNCTIONS (SPSS-equivalent)
+# STATISTICAL FUNCTIONS
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def run_normality(residuals):
-    """Shapiro-Wilk and Kolmogorov-Smirnov on residuals (SPSS-equivalent)."""
-    n = len(residuals)
-    # Shapiro-Wilk
-    sw_stat, sw_p = shapiro(residuals)
-    # K-S (Lilliefors-adjusted like SPSS: test against N(mean,std) of residuals)
-    res_std = (residuals - residuals.mean()) / residuals.std(ddof=1)
-    ks_stat, ks_p = kstest(res_std, 'norm')
-    return {
-        "n": n,
-        "sw_stat": sw_stat, "sw_p": sw_p,
-        "ks_stat": ks_stat, "ks_p": ks_p,
-        "primary": "Shapiro-Wilk" if n <= 50 else "Kolmogorov-Smirnov",
-        "primary_stat": sw_stat if n <= 50 else ks_stat,
-        "primary_p": sw_p if n <= 50 else ks_p,
-        "passed": (sw_p > 0.05 if n <= 50 else ks_p > 0.05),
-    }
+    """
+    FIX 1: KS test now uses statsmodels lilliefors() — matches SPSS Lilliefors-corrected KS.
+    Plain scipy kstest() gives different (lower) p-values than SPSS.
+    """
+    n   = len(residuals)
+    res = np.array(residuals, dtype=float)
+    sw_stat, sw_p = shapiro(res)
+    ks_stat, ks_p = lilliefors(res, dist='norm')   # ← SPSS-equivalent
+    primary       = "Shapiro-Wilk" if n <= 50 else "Kolmogorov-Smirnov"
+    primary_stat  = sw_stat if n <= 50 else ks_stat
+    primary_p     = sw_p    if n <= 50 else ks_p
+    return {"n": n,
+            "sw_stat": sw_stat, "sw_p": sw_p,
+            "ks_stat": ks_stat, "ks_p": ks_p,
+            "primary": primary, "primary_stat": primary_stat,
+            "primary_p": primary_p, "passed": primary_p > 0.05}
 
 
 def run_linearity(x_series, y_series):
-    """
-    ANOVA-based linearity test matching SPSS Means → Test for Linearity.
-    When X is continuous (all unique), falls back to OLS F-test for linearity.
-    Returns F_lin, p_lin, F_dev, p_dev.
-    """
     x = np.array(x_series, dtype=float)
     y = np.array(y_series, dtype=float)
     n = len(y)
     grand_mean = y.mean()
-
-    # Linear regression SS
-    x_c = sm.add_constant(x)
-    model = sm.OLS(y, x_c).fit()
-    ss_reg = model.ess          # SS explained by linear component
-    ss_res_linear = model.ssr
-
-    # SS for groups (unique X values) — between groups
+    x_c  = sm.add_constant(x)
+    ols  = sm.OLS(y, x_c).fit()
+    ss_reg = float(ols.ess)
+    ss_res = float(ols.ssr)
     groups = {}
     for xi, yi in zip(x, y):
-        groups.setdefault(xi, []).append(yi)
-
-    n_groups = len(groups)
-    df_lin = 1
+        groups.setdefault(round(float(xi), 10), []).append(yi)
+    n_groups  = len(groups)
     df_within = n - n_groups
-
-    ss_within = sum(np.sum((np.array(v) - np.mean(v)) ** 2) for v in groups.values())
-
-    # If all X values unique: deviation from linearity cannot be computed
-    # (no within-group variance). Report OLS F as linearity F.
-    if n_groups == n or df_within <= 0:
-        ms_lin = ss_reg / df_lin
-        ms_res = ss_res_linear / (n - 2)
-        F_lin = model.fvalue
-        p_lin = model.f_pvalue
-        return {
-            "ss_reg": ss_reg, "ss_dev": np.nan, "ss_within": np.nan,
-            "df_lin": df_lin, "df_dev": 0, "df_within": n - 2,
-            "ms_lin": ms_lin, "ms_dev": np.nan, "ms_within": ms_res,
-            "F_lin": F_lin, "p_lin": p_lin,
-            "F_dev": np.nan, "p_dev": np.nan,
-            "passed": p_lin < 0.05,
-            "continuous_x": True,
-        }
-
-    ss_between = sum(len(v) * (np.mean(v) - grand_mean) ** 2 for v in groups.values())
-    df_groups = n_groups - 1
-    ss_dev = ss_between - ss_reg
-    df_dev = df_groups - df_lin
-
-    ms_within = ss_within / df_within if df_within > 0 else np.nan
-    ms_lin = ss_reg / df_lin
-    ms_dev = ss_dev / df_dev if df_dev > 0 else np.nan
-
+    if n_groups >= n - 1 or df_within <= 0:
+        return {"ss_reg": ss_reg, "ss_dev": np.nan, "ss_within": np.nan,
+                "df_lin": 1, "df_dev": 0, "df_within": n-2,
+                "ms_lin": ss_reg, "ms_dev": np.nan, "ms_within": ss_res/(n-2),
+                "F_lin": float(ols.fvalue), "p_lin": float(ols.f_pvalue),
+                "F_dev": np.nan, "p_dev": np.nan,
+                "passed": float(ols.f_pvalue) < 0.05, "continuous_x": True}
+    ss_within  = sum(np.sum((np.array(v)-np.mean(v))**2) for v in groups.values())
+    ss_between = sum(len(v)*(np.mean(v)-grand_mean)**2 for v in groups.values())
+    df_groups  = n_groups - 1
+    ss_dev     = ss_between - ss_reg
+    df_lin     = 1
+    df_dev     = df_groups - df_lin
+    ms_within  = ss_within / df_within if df_within > 0 else np.nan
+    ms_lin     = ss_reg / df_lin
+    ms_dev     = ss_dev / df_dev if df_dev > 0 else np.nan
     F_lin = ms_lin / ms_within if (ms_within and ms_within > 0) else np.nan
-    F_dev = ms_dev / ms_within if (ms_dev is not None and ms_within and ms_within > 0 and df_dev > 0) else np.nan
-
-    p_lin = 1 - stats.f.cdf(F_lin, df_lin, df_within) if not np.isnan(F_lin) else np.nan
-    p_dev = 1 - stats.f.cdf(F_dev, df_dev, df_within) if (not np.isnan(F_dev) and df_dev > 0) else np.nan
-
-    passed = (not np.isnan(p_lin) and p_lin < 0.05) and (np.isnan(p_dev) or p_dev > 0.05)
-    return {
-        "ss_reg": ss_reg, "ss_dev": ss_dev, "ss_within": ss_within,
-        "df_lin": df_lin, "df_dev": df_dev, "df_within": df_within,
-        "ms_lin": ms_lin, "ms_dev": ms_dev, "ms_within": ms_within,
-        "F_lin": F_lin, "p_lin": p_lin,
-        "F_dev": F_dev, "p_dev": p_dev,
-        "passed": passed,
-        "continuous_x": False,
-    }
+    F_dev = (ms_dev / ms_within
+             if (ms_dev is not None and not np.isnan(ms_dev)
+                 and ms_within and ms_within > 0 and df_dev > 0) else np.nan)
+    p_lin = float(1 - stats.f.cdf(F_lin, df_lin, df_within)) if not np.isnan(F_lin) else np.nan
+    p_dev = (float(1 - stats.f.cdf(F_dev, df_dev, df_within))
+             if (not np.isnan(F_dev) and df_dev > 0) else np.nan)
+    passed = ((not np.isnan(p_lin) and p_lin < 0.05) and
+              (np.isnan(p_dev) if np.isnan(p_dev) else p_dev > 0.05))
+    return {"ss_reg": ss_reg, "ss_dev": ss_dev, "ss_within": ss_within,
+            "df_lin": df_lin, "df_dev": df_dev, "df_within": df_within,
+            "ms_lin": ms_lin, "ms_dev": ms_dev, "ms_within": ms_within,
+            "F_lin": F_lin, "p_lin": p_lin, "F_dev": F_dev, "p_dev": p_dev,
+            "passed": passed, "continuous_x": False}
 
 
 def run_vif(X_df):
-    """VIF and Tolerance — identical to SPSS Collinearity Diagnostics."""
     X = sm.add_constant(X_df.values)
-    results = []
+    rows = []
     for i, col in enumerate(X_df.columns):
-        vif = variance_inflation_factor(X, i + 1)
-        tol = 1.0 / vif if vif != 0 else np.nan
-        results.append({"Variable": col, "Tolerance": tol, "VIF": vif})
-    return pd.DataFrame(results)
+        vif = float(variance_inflation_factor(X, i + 1))
+        rows.append({"Variable": col, "Tolerance": 1.0/vif if vif else np.nan, "VIF": vif})
+    return pd.DataFrame(rows)
 
 
 def run_glejser(residuals, X_df):
     """
-    Glejser heteroscedasticity test — regress |residuals| on predictors.
-    Matches SPSS Glejser output.
+    FIX 2: Use .iloc[] for all model.params/bse/tvalues/pvalues access.
+    sm.add_constant() on a numpy array produces a named Series index
+    ('const','x1','x2',...) in statsmodels — integer key [0] raises KeyError
+    in pandas >= 2.0.
     """
-    abs_res = np.abs(residuals)
-    X_c = sm.add_constant(X_df.values)
-    model = sm.OLS(abs_res, X_c).fit()
-    rows = []
-    # Constant
-    rows.append({
-        "Term": "(Constant)",
-        "B": model.params[0],
-        "Std. Error": model.bse[0],
-        "t": model.tvalues[0],
-        "Sig.": model.pvalues[0],
-    })
+    abs_res = np.abs(np.array(residuals, dtype=float))
+    X_c     = sm.add_constant(X_df.values)
+    model   = sm.OLS(abs_res, X_c).fit()
+    p_arr  = np.asarray(model.params)
+    b_arr  = np.asarray(model.bse)
+    t_arr  = np.asarray(model.tvalues)
+    pv_arr = np.asarray(model.pvalues)
+    rows = [{"Term": "(Constant)",
+             "B":          float(p_arr[0]),
+             "Std. Error": float(b_arr[0]),
+             "t":          float(t_arr[0]),
+             "Sig.":       float(pv_arr[0])}]
     for i, col in enumerate(X_df.columns):
-        rows.append({
-            "Term": col,
-            "B": model.params[i + 1],
-            "Std. Error": model.bse[i + 1],
-            "t": model.tvalues[i + 1],
-            "Sig.": model.pvalues[i + 1],
-        })
-    passed = all(row["Sig."] > 0.05 for row in rows if row["Term"] != "(Constant)")
+        rows.append({"Term": col,
+                     "B":          float(p_arr[i+1]),
+                     "Std. Error": float(b_arr[i+1]),
+                     "t":          float(t_arr[i+1]),
+                     "Sig.":       float(pv_arr[i+1])})
+    passed = all(r["Sig."] > 0.05 for r in rows if r["Term"] != "(Constant)")
     return pd.DataFrame(rows), passed, model
 
 
 def run_regression(y, X_df):
-    """
-    OLS regression — SPSS-equivalent Model Summary, ANOVA, Coefficients.
-    """
-    X_c = sm.add_constant(X_df.values)
+    X_c   = sm.add_constant(X_df.values)
     model = sm.OLS(y.values, X_c).fit()
-    n = len(y)
-    k = X_df.shape[1]
-
-    # ── Model Summary ──────────────────────────────────────────────────────
-    R = np.sqrt(model.rsquared)
-    R2 = model.rsquared
-    adj_R2 = model.rsquared_adj
-    se_est = np.sqrt(model.mse_resid)
-    dw = durbin_watson(model.resid)
-
-    # ── ANOVA ──────────────────────────────────────────────────────────────
-    ss_reg = model.ess
-    ss_res = model.ssr
-    ss_tot = model.centered_tss
-    df_reg = k
-    df_res = n - k - 1
-    df_tot = n - 1
-    ms_reg = ss_reg / df_reg
-    ms_res = ss_res / df_res
-    F = model.fvalue
-    p_F = model.f_pvalue
-
+    n = len(y); k = X_df.shape[1]
+    R      = float(np.sqrt(model.rsquared))
+    R2     = float(model.rsquared)
+    adj_R2 = float(model.rsquared_adj)
+    se_est = float(np.sqrt(model.mse_resid))
+    dw     = float(durbin_watson(model.resid))
+    ss_reg = float(model.ess); ss_res = float(model.ssr); ss_tot = float(model.centered_tss)
+    df_reg = k; df_res = n-k-1; df_tot = n-1
+    ms_reg = ss_reg/df_reg; ms_res = ss_res/df_res
+    F = float(model.fvalue); p_F = float(model.f_pvalue)
     anova = pd.DataFrame([
-        {"": "Regression", "Sum of Squares": ss_reg, "df": df_reg,
-         "Mean Square": ms_reg, "F": F, "Sig.": p_F},
-        {"": "Residual",   "Sum of Squares": ss_res, "df": df_res,
-         "Mean Square": ms_res, "F": "", "Sig.": ""},
-        {"": "Total",      "Sum of Squares": ss_tot, "df": df_tot,
-         "Mean Square": "", "F": "", "Sig.": ""},
+        {"": "Regression", "Sum of Squares": ss_reg, "df": df_reg, "Mean Square": ms_reg, "F": F,  "Sig.": p_F},
+        {"": "Residual",   "Sum of Squares": ss_res, "df": df_res, "Mean Square": ms_res, "F": "",  "Sig.": ""},
+        {"": "Total",      "Sum of Squares": ss_tot, "df": df_tot, "Mean Square": "",     "F": "",  "Sig.": ""},
     ])
-
-    # ── Coefficients ───────────────────────────────────────────────────────
-    # Standardised beta = b * (std_x / std_y)
-    y_std = y.std(ddof=1)
-    coef_rows = []
-    coef_rows.append({
-        "Model": "(Constant)",
-        "B": model.params[0],
-        "Std. Error": model.bse[0],
-        "Beta": "",
-        "t": model.tvalues[0],
-        "Sig.": model.pvalues[0],
-    })
+    y_std = float(y.std(ddof=1))
+    # Use .iloc[] throughout — FIX 2 applied here too
+    p2  = np.asarray(model.params)
+    b2  = np.asarray(model.bse)
+    t2  = np.asarray(model.tvalues)
+    pv2 = np.asarray(model.pvalues)
+    coef_rows = [{"Model": "(Constant)",
+                  "B": float(p2[0]), "Std. Error": float(b2[0]),
+                  "Beta": "", "t": float(t2[0]), "Sig.": float(pv2[0])}]
     for i, col in enumerate(X_df.columns):
-        x_std = X_df[col].std(ddof=1)
-        beta = model.params[i + 1] * (x_std / y_std)
-        coef_rows.append({
-            "Model": col,
-            "B": model.params[i + 1],
-            "Std. Error": model.bse[i + 1],
-            "Beta": beta,
-            "t": model.tvalues[i + 1],
-            "Sig.": model.pvalues[i + 1],
-        })
-    coef_df = pd.DataFrame(coef_rows)
-
-    residuals = pd.Series(model.resid, name="Residuals")
-    fitted = pd.Series(model.fittedvalues, name="Fitted")
-
-    return {
-        "model": model,
-        "R": R, "R2": R2, "adj_R2": adj_R2, "se_est": se_est, "dw": dw,
-        "ss_reg": ss_reg, "ss_res": ss_res, "ss_tot": ss_tot,
-        "df_reg": df_reg, "df_res": df_res, "df_tot": df_tot,
-        "ms_reg": ms_reg, "ms_res": ms_res,
-        "F": F, "p_F": p_F,
-        "anova": anova,
-        "coef_df": coef_df,
-        "residuals": residuals,
-        "fitted": fitted,
-        "n": n, "k": k,
-    }
+        x_std = float(X_df[col].std(ddof=1))
+        beta  = float(p2[i+1]) * (x_std / y_std)
+        coef_rows.append({"Model": col,
+                          "B": float(p2[i+1]), "Std. Error": float(b2[i+1]),
+                          "Beta": beta, "t": float(t2[i+1]),
+                          "Sig.": float(pv2[i+1])})
+    return {"model": model,
+            "R": R, "R2": R2, "adj_R2": adj_R2, "se_est": se_est, "dw": dw,
+            "ss_reg": ss_reg, "ss_res": ss_res, "ss_tot": ss_tot,
+            "df_reg": df_reg, "df_res": df_res, "df_tot": df_tot,
+            "ms_reg": ms_reg, "ms_res": ms_res, "F": F, "p_F": p_F,
+            "anova": anova, "coef_df": pd.DataFrame(coef_rows),
+            "residuals": pd.Series(model.resid, name="Residuals"),
+            "fitted":    pd.Series(model.fittedvalues, name="Fitted"),
+            "n": n, "k": k}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# PLOT FUNCTIONS
+# PLOTS  —  light background
 # ═══════════════════════════════════════════════════════════════════════════════
 
-DARK_BG   = "#0f1117"
-CARD_BG   = "#1a1d27"
-GOLD      = "#c9b99a"
-LIGHT_TXT = "#e8e8e8"
-MUTED_TXT = "#6a6a7a"
-PASS_CLR  = "#4ade80"
-FAIL_CLR  = "#f87171"
+BG = "#f8f7f4"; AX = "#ffffff"; AC = "#b5965a"; DK = "#1a1a2e"; MT = "#8a8a9a"
 
 def style_ax(ax, fig):
-    fig.patch.set_facecolor(DARK_BG)
-    ax.set_facecolor(CARD_BG)
-    ax.tick_params(colors=MUTED_TXT, labelsize=8)
-    ax.xaxis.label.set_color(MUTED_TXT)
-    ax.yaxis.label.set_color(MUTED_TXT)
-    ax.title.set_color(LIGHT_TXT)
-    for spine in ax.spines.values():
-        spine.set_edgecolor("#2a2d3a")
-
+    fig.patch.set_facecolor(BG); ax.set_facecolor(AX)
+    ax.tick_params(colors=MT, labelsize=8.5)
+    ax.xaxis.label.set_color(DK); ax.yaxis.label.set_color(DK); ax.title.set_color(DK)
+    for sp in ax.spines.values(): sp.set_edgecolor("#d0ccc4")
 
 def plot_normality(residuals):
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
-    fig.patch.set_facecolor(DARK_BG)
-
-    # Histogram
-    ax1 = axes[0]
-    ax1.set_facecolor(CARD_BG)
-    ax1.hist(residuals, bins=min(20, len(residuals)//2+1),
-             color=GOLD, alpha=0.75, edgecolor="#2a2d3a", linewidth=0.5)
-    mu, sigma = residuals.mean(), residuals.std(ddof=1)
-    x_range = np.linspace(mu - 4*sigma, mu + 4*sigma, 200)
-    n = len(residuals)
-    bin_w = (residuals.max() - residuals.min()) / (min(20, n//2+1))
-    ax1.plot(x_range, norm.pdf(x_range, mu, sigma) * n * bin_w,
-             color="#f0e6d3", linewidth=1.8, label="Normal curve")
-    ax1.set_title("Histogram of Residuals", fontsize=11, pad=10, color=LIGHT_TXT,
-                  fontfamily="serif")
-    ax1.set_xlabel("Residual", color=MUTED_TXT, fontsize=9)
-    ax1.set_ylabel("Frequency", color=MUTED_TXT, fontsize=9)
-    ax1.tick_params(colors=MUTED_TXT, labelsize=8)
-    for sp in ax1.spines.values(): sp.set_edgecolor("#2a2d3a")
-
-    # Q-Q Plot
-    ax2 = axes[1]
-    ax2.set_facecolor(CARD_BG)
-    (osm, osr), (slope, intercept, r) = stats.probplot(residuals, dist="norm")
-    ax2.scatter(osm, osr, color=GOLD, s=22, alpha=0.8, zorder=3)
-    x_line = np.array([osm[0], osm[-1]])
-    ax2.plot(x_line, slope * x_line + intercept, color="#f0e6d3",
-             linewidth=1.5, zorder=2)
-    ax2.set_title("Normal Q-Q Plot", fontsize=11, pad=10, color=LIGHT_TXT,
-                  fontfamily="serif")
-    ax2.set_xlabel("Theoretical Quantiles", color=MUTED_TXT, fontsize=9)
-    ax2.set_ylabel("Sample Quantiles", color=MUTED_TXT, fontsize=9)
-    ax2.tick_params(colors=MUTED_TXT, labelsize=8)
-    for sp in ax2.spines.values(): sp.set_edgecolor("#2a2d3a")
-
-    plt.tight_layout(pad=2)
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))
+    fig.patch.set_facecolor(BG)
+    ax1 = axes[0]; ax1.set_facecolor(AX)
+    nb = min(20, max(5, len(residuals)//3))
+    ax1.hist(residuals, bins=nb, color=AC, alpha=0.75, edgecolor="white", linewidth=0.6)
+    mu, sigma = float(residuals.mean()), float(residuals.std(ddof=1))
+    xr = np.linspace(mu-4*sigma, mu+4*sigma, 300)
+    bw = (float(residuals.max())-float(residuals.min()))/nb
+    ax1.plot(xr, norm.pdf(xr, mu, sigma)*len(residuals)*bw, color=DK, linewidth=2, label="Normal curve")
+    ax1.set_title("Histogram of Residuals", fontsize=11, pad=10, color=DK, fontweight="bold")
+    ax1.set_xlabel("Residual", fontsize=9); ax1.set_ylabel("Frequency", fontsize=9)
+    ax1.tick_params(colors=MT, labelsize=8.5); ax1.legend(fontsize=8)
+    for sp in ax1.spines.values(): sp.set_edgecolor("#d0ccc4")
+    ax2 = axes[1]; ax2.set_facecolor(AX)
+    (osm, osr), (slope, intercept, _) = stats.probplot(residuals, dist="norm")
+    ax2.scatter(osm, osr, color=AC, s=28, alpha=0.85, zorder=3, label="Observed")
+    xl = np.array([osm[0], osm[-1]])
+    ax2.plot(xl, slope*xl+intercept, color=DK, linewidth=1.8, zorder=2, label="Expected")
+    ax2.set_title("Normal Q-Q Plot", fontsize=11, pad=10, color=DK, fontweight="bold")
+    ax2.set_xlabel("Theoretical Quantiles", fontsize=9); ax2.set_ylabel("Sample Quantiles", fontsize=9)
+    ax2.tick_params(colors=MT, labelsize=8.5); ax2.legend(fontsize=8)
+    for sp in ax2.spines.values(): sp.set_edgecolor("#d0ccc4")
+    plt.tight_layout(pad=2.5)
     return fig
-
 
 def plot_scatter_residuals(fitted, residuals):
-    fig, ax = plt.subplots(figsize=(7, 4))
-    style_ax(ax, fig)
-    # Standardise
-    z_resid = (residuals - residuals.mean()) / residuals.std(ddof=1)
-    z_fitted = (fitted - fitted.mean()) / fitted.std(ddof=1)
-    ax.scatter(z_fitted, z_resid, color=GOLD, s=25, alpha=0.75, zorder=3)
-    ax.axhline(0, color="#f0e6d3", linewidth=1, linestyle="--", alpha=0.6)
-    ax.axhline(2, color=FAIL_CLR, linewidth=0.7, linestyle=":", alpha=0.5)
-    ax.axhline(-2, color=FAIL_CLR, linewidth=0.7, linestyle=":", alpha=0.5)
-    ax.set_title("Scatterplot — ZRESID vs ZPRED", fontsize=11, pad=10,
-                 color=LIGHT_TXT, fontfamily="serif")
-    ax.set_xlabel("Regression Standardized Predicted Value (ZPRED)",
-                  color=MUTED_TXT, fontsize=8)
-    ax.set_ylabel("Regression Standardized Residual (ZRESID)",
-                  color=MUTED_TXT, fontsize=8)
-    plt.tight_layout()
+    fig, ax = plt.subplots(figsize=(7.5, 4.2)); style_ax(ax, fig)
+    zr = (residuals-residuals.mean())/residuals.std(ddof=1)
+    zf = (fitted-fitted.mean())/fitted.std(ddof=1)
+    ax.scatter(zf, zr, color=AC, s=30, alpha=0.8, zorder=3, edgecolors="white", linewidths=0.4)
+    ax.axhline(0,  color=DK,       linewidth=1.2, linestyle="--", alpha=0.7, label="Zero line")
+    ax.axhline(2,  color="#c62828", linewidth=0.8, linestyle=":",  alpha=0.5, label="±2 SD")
+    ax.axhline(-2, color="#c62828", linewidth=0.8, linestyle=":",  alpha=0.5)
+    ax.set_title("Scatterplot — ZRESID vs ZPRED", fontsize=11, pad=10, color=DK, fontweight="bold")
+    ax.set_xlabel("Standardized Predicted Value (ZPRED)", fontsize=9)
+    ax.set_ylabel("Standardized Residual (ZRESID)", fontsize=9)
+    ax.legend(fontsize=8); plt.tight_layout()
     return fig
 
-
-def plot_regression_line(x_series, y_series, x_label, y_label, model):
-    fig, ax = plt.subplots(figsize=(7, 4))
-    style_ax(ax, fig)
-    x = np.array(x_series)
-    y = np.array(y_series)
-    ax.scatter(x, y, color=GOLD, s=30, alpha=0.8, zorder=3, label="Observed")
-    x_line = np.linspace(x.min(), x.max(), 200)
-    X_line = sm.add_constant(x_line)
-    y_pred = model.predict(X_line)
-    ax.plot(x_line, y_pred, color="#f0e6d3", linewidth=2, zorder=4,
-            label="Regression line")
-    ax.set_title(f"Scatter Plot: {x_label} vs {y_label}",
-                 fontsize=11, pad=10, color=LIGHT_TXT, fontfamily="serif")
-    ax.set_xlabel(x_label, color=MUTED_TXT, fontsize=9)
-    ax.set_ylabel(y_label, color=MUTED_TXT, fontsize=9)
-    ax.legend(facecolor=CARD_BG, edgecolor="#2a2d3a",
-              labelcolor=LIGHT_TXT, fontsize=8)
-    plt.tight_layout()
+def plot_regression_line(x_arr, y_arr, x_label, y_label, model_sm):
+    fig, ax = plt.subplots(figsize=(7.5, 4.2)); style_ax(ax, fig)
+    ax.scatter(x_arr, y_arr, color=AC, s=35, alpha=0.8, zorder=3,
+               edgecolors="white", linewidths=0.4, label="Observed")
+    xl   = np.linspace(x_arr.min(), x_arr.max(), 300)
+    X_lc = sm.add_constant(xl)
+    ax.plot(xl, model_sm.predict(X_lc), color=DK, linewidth=2, zorder=4, label="Regression line")
+    ax.set_title(f"Scatter Plot: {x_label} vs {y_label}", fontsize=11, pad=10, color=DK, fontweight="bold")
+    ax.set_xlabel(x_label, fontsize=9); ax.set_ylabel(y_label, fontsize=9)
+    ax.legend(fontsize=8); plt.tight_layout()
     return fig
 
+def plot_obs_vs_fitted(fitted, y, y_label):
+    fig, ax = plt.subplots(figsize=(7.5, 4.2)); style_ax(ax, fig)
+    ax.scatter(fitted, y, color=AC, s=30, alpha=0.8, zorder=3,
+               edgecolors="white", linewidths=0.4, label="Observations")
+    mn = min(float(fitted.min()), float(y.min()))
+    mx = max(float(fitted.max()), float(y.max()))
+    ax.plot([mn,mx],[mn,mx], color=DK, linewidth=1.8, linestyle="--", label="Perfect fit")
+    ax.set_title("Observed vs Fitted Values", fontsize=11, pad=10, color=DK, fontweight="bold")
+    ax.set_xlabel("Fitted (Predicted) Values", fontsize=9)
+    ax.set_ylabel(f"Observed {y_label}", fontsize=9)
+    ax.legend(fontsize=8); plt.tight_layout()
+    return fig
 
 def fig_to_bytes(fig):
     buf = BytesIO()
-    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight",
-                facecolor=DARK_BG)
-    buf.seek(0)
-    return buf.read()
+    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", facecolor=BG)
+    buf.seek(0); return buf.read()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# WORD REPORT GENERATION
+# WORD REPORT
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def generate_word_report(reg_type, y_col, x_cols,
-                         norm_results, lin_results,
-                         vif_df, glejser_df, glejser_passed,
-                         dw_value, reg_results,
-                         all_passed, figs_bytes):
+def generate_word_report(reg_type, y_col, x_cols, norm_results, lin_results,
+                         vif_df, glejser_df, glejser_passed, dw_value,
+                         reg_results, all_passed, figs_bytes):
     from docx import Document
     from docx.shared import Inches, Pt, RGBColor
     from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.enum.table import WD_TABLE_ALIGNMENT
-    from docx.oxml.ns import qn
-    from docx.oxml import OxmlElement
-
     doc = Document()
+    doc.styles["Normal"].font.name = "Calibri"
+    doc.styles["Normal"].font.size = Pt(11)
 
-    # Styles
-    style = doc.styles["Normal"]
-    style.font.name = "Calibri"
-    style.font.size = Pt(11)
+    def sfmt(v, d=4):
+        try:
+            f = float(v)
+            return "-" if np.isnan(f) else f"{f:.{d}f}"
+        except Exception:
+            return str(v) if v not in ("",None) else "-"
 
-    def add_heading(text, level=1):
+    def add_h(text, level=1):
         h = doc.add_heading(text, level=level)
-        h.runs[0].font.color.rgb = RGBColor(0x1a, 0x1a, 0x2e)
-        return h
+        for r in h.runs: r.font.color.rgb = RGBColor(0x1a,0x1a,0x2e)
 
-    def add_para(text, bold=False, italic=False, align=None):
-        p = doc.add_paragraph()
-        run = p.add_run(text)
-        run.bold = bold
-        run.italic = italic
-        if align:
-            p.alignment = align
-        return p
+    def add_p(text, bold=False):
+        p = doc.add_paragraph(); r = p.add_run(text); r.bold = bold
 
-    def add_table_from_df(df, caption=None):
-        if caption:
-            cp = doc.add_paragraph(caption)
-            cp.runs[0].bold = True
-        table = doc.add_table(rows=1, cols=len(df.columns))
-        table.style = "Table Grid"
-        hdr = table.rows[0].cells
-        for i, col in enumerate(df.columns):
-            hdr[i].text = str(col)
-            hdr[i].paragraphs[0].runs[0].bold = True
-        for _, row in df.iterrows():
-            cells = table.add_row().cells
-            for i, val in enumerate(row):
-                if isinstance(val, float):
-                    cells[i].text = f"{val:.4f}" if not np.isnan(val) else "-"
-                else:
-                    cells[i].text = str(val) if val != "" else "-"
+    def add_tbl(df, cap=None):
+        if cap:
+            cp = doc.add_paragraph(cap); cp.runs[0].bold = True
+        t = doc.add_table(rows=1, cols=len(df.columns)); t.style = "Table Grid"
+        for i,c in enumerate(df.columns):
+            t.rows[0].cells[i].text = str(c)
+            t.rows[0].cells[i].paragraphs[0].runs[0].bold = True
+        for _,row in df.iterrows():
+            cells = t.add_row().cells
+            for i,v in enumerate(row): cells[i].text = sfmt(v)
         doc.add_paragraph()
 
-    # ── Title ──────────────────────────────────────────────────────────────
     title = doc.add_heading(
-        f"{'Simple' if reg_type == 'Simple' else 'Multiple'} Linear Regression Analysis Report",
-        level=0)
+        f"{'Simple' if reg_type=='Simple' else 'Multiple'} Linear Regression Analysis Report", 0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-    add_para(f"Dependent Variable (Y): {y_col}", bold=True)
-    add_para(f"Independent Variable(s) (X): {', '.join(x_cols)}", bold=True)
+    add_p(f"Dependent Variable (Y): {y_col}", bold=True)
+    add_p(f"Independent Variable(s): {', '.join(x_cols)}", bold=True)
     doc.add_paragraph()
 
-    # ── 1. Normality ───────────────────────────────────────────────────────
-    add_heading("1. Normality Test of Residuals", level=1)
-    add_para(
-        "The normality assumption requires that regression residuals follow a normal distribution. "
-        f"{'Shapiro-Wilk is used (n ≤ 50).' if norm_results['n'] <= 50 else 'Kolmogorov-Smirnov is used (n > 50).'}"
-    )
-    norm_df = pd.DataFrame([
-        {"Test": "Kolmogorov-Smirnov", "Statistic": norm_results["ks_stat"],
-         "Sig.": norm_results["ks_p"]},
-        {"Test": "Shapiro-Wilk", "Statistic": norm_results["sw_stat"],
-         "Sig.": norm_results["sw_p"]},
+    add_h("1. Normality Test of Residuals")
+    n_df = pd.DataFrame([
+        {"Test":"Kolmogorov-Smirnov (Lilliefors)","Statistic":norm_results["ks_stat"],"Sig.":norm_results["ks_p"]},
+        {"Test":"Shapiro-Wilk","Statistic":norm_results["sw_stat"],"Sig.":norm_results["sw_p"]},
     ])
-    add_table_from_df(norm_df, "Tests of Normality")
-    primary_p = norm_results["primary_p"]
-    verdict = "normally distributed" if primary_p > 0.05 else "NOT normally distributed"
-    add_para(
-        f"Based on the {norm_results['primary']} test, Sig. = {primary_p:.3f} "
-        f"({'> 0.05' if primary_p > 0.05 else '< 0.05'}). "
-        f"The residuals are {verdict}. "
-        f"Normality assumption: {'✓ SATISFIED' if norm_results['passed'] else '✗ VIOLATED'}.",
-        bold=True
-    )
-
-    # Normality figure
+    add_tbl(n_df, "Tests of Normality")
+    pp = norm_results["primary_p"]
+    add_p(f"{norm_results['primary']}: Sig. = {pp:.4f} ({'> 0.05' if pp>0.05 else '< 0.05'}). "
+          f"Residuals {'are' if norm_results['passed'] else 'are NOT'} normally distributed. "
+          f"Assumption: {'SATISFIED' if norm_results['passed'] else 'VIOLATED'}.", bold=True)
     if "normality" in figs_bytes:
-        buf = BytesIO(figs_bytes["normality"])
-        doc.add_picture(buf, width=Inches(5.5))
+        doc.add_picture(BytesIO(figs_bytes["normality"]), width=Inches(5.5))
         doc.add_paragraph()
 
-    # ── 2. Linearity ───────────────────────────────────────────────────────
-    add_heading("2. Linearity Test", level=1)
-    for x_col, lr in lin_results.items():
-        add_heading(f"  {x_col} → {y_col}", level=2)
-        lin_df = pd.DataFrame([
-            {"Source": "Linearity",
-             "Sum of Squares": lr["ss_reg"],
-             "df": lr["df_lin"],
-             "Mean Square": lr["ms_lin"],
-             "F": lr["F_lin"],
-             "Sig.": lr["p_lin"]},
-            {"Source": "Deviation from Linearity",
-             "Sum of Squares": lr["ss_dev"],
-             "df": lr["df_dev"],
-             "Mean Square": lr["ms_dev"] if lr["df_dev"] > 0 else np.nan,
-             "F": lr["F_dev"] if lr["df_dev"] > 0 else np.nan,
-             "Sig.": lr["p_dev"] if lr["df_dev"] > 0 else np.nan},
-            {"Source": "Within Groups",
-             "Sum of Squares": lr["ss_within"],
-             "df": lr["df_within"],
-             "Mean Square": lr["ms_within"],
-             "F": "", "Sig.": ""},
+    add_h("2. Linearity Test")
+    for xc, lr in lin_results.items():
+        add_h(f"  {xc} → {y_col}", level=2)
+        lt = pd.DataFrame([
+            {"Source":"Linearity","SS":sfmt(lr["ss_reg"]),"df":lr["df_lin"],"MS":sfmt(lr["ms_lin"]),"F":sfmt(lr["F_lin"]),"Sig.":sfmt(lr["p_lin"])},
+            {"Source":"Deviation from Linearity","SS":sfmt(lr.get("ss_dev",np.nan)),"df":lr["df_dev"] if lr["df_dev"]>0 else "-","MS":sfmt(lr.get("ms_dev",np.nan)),"F":sfmt(lr.get("F_dev",np.nan)),"Sig.":sfmt(lr.get("p_dev",np.nan))},
+            {"Source":"Within Groups","SS":sfmt(lr.get("ss_within",np.nan)),"df":lr["df_within"],"MS":sfmt(lr.get("ms_within",np.nan)),"F":"-","Sig.":"-"},
         ])
-        add_table_from_df(lin_df, f"ANOVA Table — {x_col} vs {y_col}")
-        p_lin_str = f"{lr['p_lin']:.3f}" if not np.isnan(lr['p_lin']) else "N/A"
-        p_dev_str = f"{lr['p_dev']:.3f}" if (lr['df_dev'] > 0 and not np.isnan(lr['p_dev'])) else "N/A"
-        add_para(
-            f"Sig. Linearity = {p_lin_str}; Sig. Deviation from Linearity = {p_dev_str}. "
-            f"Linearity assumption: {'✓ SATISFIED' if lr['passed'] else '✗ VIOLATED'}.",
-            bold=True
-        )
+        add_tbl(lt, f"ANOVA Table — {xc} vs {y_col}")
+        add_p(f"Sig. Linearity={sfmt(lr['p_lin'])}; Sig. Deviation={sfmt(lr.get('p_dev',np.nan))}. "
+              f"Assumption: {'SATISFIED' if lr['passed'] else 'VIOLATED'}.", bold=True)
 
-    # ── 3. Multicollinearity (multiple only) ───────────────────────────────
-    if reg_type == "Multiple" and vif_df is not None:
-        add_heading("3. Multicollinearity Test", level=1)
-        add_table_from_df(vif_df, "Collinearity Statistics")
-        mc_pass = all(vif_df["VIF"] < 10) and all(vif_df["Tolerance"] > 0.10)
-        add_para(
-            f"All VIF values {'< 10 and Tolerance > 0.10' if mc_pass else 'exceed thresholds'}. "
-            f"Multicollinearity assumption: {'✓ SATISFIED' if mc_pass else '✗ VIOLATED'}.",
-            bold=True
-        )
+    if reg_type=="Multiple" and vif_df is not None:
+        add_h("3. Multicollinearity Test")
+        add_tbl(vif_df.round(4), "Collinearity Statistics")
+        mc_ok = all(vif_df["VIF"]<10) and all(vif_df["Tolerance"]>0.10)
+        add_p(f"All VIF<10 and Tolerance>0.10: {'Yes' if mc_ok else 'No'}. "
+              f"Assumption: {'SATISFIED' if mc_ok else 'VIOLATED'}.", bold=True)
 
-    # ── 4. Heteroscedasticity ─────────────────────────────────────────────
-    sec = "4" if reg_type == "Multiple" else "3"
-    add_heading(f"{sec}. Heteroscedasticity Test (Glejser)", level=1)
-    add_table_from_df(glejser_df, "Glejser Test — Coefficients")
-    add_para(
-        f"All predictors have Sig. {'> 0.05' if glejser_passed else '< 0.05 for at least one predictor'}. "
-        f"Heteroscedasticity assumption: {'✓ SATISFIED' if glejser_passed else '✗ VIOLATED'}.",
-        bold=True
-    )
+    sec = "4" if reg_type=="Multiple" else "3"
+    add_h(f"{sec}. Heteroscedasticity Test (Glejser)")
+    add_tbl(glejser_df.round(4), "Glejser Test — Coefficients")
+    add_p(f"All predictor Sig.>0.05: {'Yes' if glejser_passed else 'No'}. "
+          f"Assumption: {'SATISFIED' if glejser_passed else 'VIOLATED'}.", bold=True)
     if "scatter" in figs_bytes:
-        buf = BytesIO(figs_bytes["scatter"])
-        doc.add_picture(buf, width=Inches(5.0))
+        doc.add_picture(BytesIO(figs_bytes["scatter"]), width=Inches(5.0))
         doc.add_paragraph()
 
-    # ── 5. Autocorrelation ────────────────────────────────────────────────
-    sec2 = "5" if reg_type == "Multiple" else "4"
-    add_heading(f"{sec2}. Autocorrelation Test (Durbin-Watson)", level=1)
-    dw_pass = 1.5 <= dw_value <= 2.5
-    add_para(f"Durbin-Watson statistic: {dw_value:.3f}")
-    add_para(
-        f"DW = {dw_value:.3f} ({'within' if dw_pass else 'outside'} acceptable range 1.5 – 2.5). "
-        f"Autocorrelation assumption: {'✓ SATISFIED' if dw_pass else '✗ VIOLATED'}.",
-        bold=True
-    )
+    sec2 = "5" if reg_type=="Multiple" else "4"
+    add_h(f"{sec2}. Autocorrelation Test (Durbin-Watson)")
+    dw_ok = 1.5 <= dw_value <= 2.5
+    add_p(f"DW = {dw_value:.4f} ({'within' if dw_ok else 'outside'} 1.5–2.5). "
+          f"Assumption: {'SATISFIED' if dw_ok else 'VIOLATED'}.", bold=True)
 
-    # ── 6. Regression Results ─────────────────────────────────────────────
-    sec3 = "6" if reg_type == "Multiple" else "5"
-    add_heading(f"{sec3}. Regression Analysis Results", level=1)
+    sec3 = "6" if reg_type=="Multiple" else "5"
+    add_h(f"{sec3}. Regression Analysis Results")
+    ms_df = pd.DataFrame([{"R":reg_results["R"],"R Square":reg_results["R2"],
+                            "Adjusted R Square":reg_results["adj_R2"],
+                            "Std. Error":reg_results["se_est"],"Durbin-Watson":reg_results["dw"]}])
+    add_tbl(ms_df.round(4), "Model Summary")
+    add_tbl(reg_results["anova"], "ANOVA")
+    add_tbl(reg_results["coef_df"], "Coefficients")
 
-    # Model Summary
-    ms_df = pd.DataFrame([{
-        "R": reg_results["R"],
-        "R Square": reg_results["R2"],
-        "Adjusted R Square": reg_results["adj_R2"],
-        "Std. Error of the Estimate": reg_results["se_est"],
-        "Durbin-Watson": reg_results["dw"],
-    }])
-    add_table_from_df(ms_df, "Model Summary")
-
-    # ANOVA
-    add_table_from_df(reg_results["anova"], "ANOVA")
-
-    # Coefficients
-    coef_display = reg_results["coef_df"].copy()
-    add_table_from_df(coef_display, "Coefficients")
-
-    # Regression equation
-    coefs = reg_results["coef_df"]
-    const = coefs.loc[coefs["Model"] == "(Constant)", "B"].values[0]
-    eq_parts = [f"{const:.4f}"]
-    for _, row in coefs[coefs["Model"] != "(Constant)"].iterrows():
-        sign = "+" if row["B"] >= 0 else "-"
-        eq_parts.append(f"{sign} {abs(row['B']):.4f}({row['Model']})")
+    coefs     = reg_results["coef_df"]
+    const_val = float(coefs.loc[coefs["Model"]=="(Constant)","B"].values[0])
+    eq_parts  = [f"{const_val:.4f}"]
+    for _,row in coefs[coefs["Model"]!="(Constant)"].iterrows():
+        s = "+" if row["B"]>=0 else ""; eq_parts.append(f"{s}{row['B']:.4f}({row['Model']})")
     eq_str = "Ŷ = " + " ".join(eq_parts)
-    add_para(f"Regression Equation: {eq_str}", bold=True)
-
-    # Regression plot
+    add_p(f"Regression Equation: {eq_str}", bold=True)
     if "regression" in figs_bytes:
-        buf = BytesIO(figs_bytes["regression"])
-        doc.add_picture(buf, width=Inches(5.5))
+        doc.add_picture(BytesIO(figs_bytes["regression"]), width=Inches(5.5))
         doc.add_paragraph()
 
-    # ── 7. Interpretation & Conclusion ────────────────────────────────────
-    sec4 = "7" if reg_type == "Multiple" else "6"
-    add_heading(f"{sec4}. Interpretation and Conclusion", level=1)
+    sec4 = "7" if reg_type=="Multiple" else "6"
+    add_h(f"{sec4}. Interpretation and Conclusion")
+    sig_model = reg_results["p_F"] < 0.05
+    r2_pct    = reg_results["R2"]*100
+    lin_s = " ".join(
+        f"Linearity {xc}→{y_col}: {'confirmed' if lr['passed'] else 'not confirmed'} (Sig.={sfmt(lr['p_lin'])})."
+        for xc,lr in lin_results.items())
+    mc_s = ""
+    if reg_type=="Multiple" and vif_df is not None:
+        mc_s = ("No multicollinearity. " if all(vif_df["VIF"]<10) else "Multicollinearity detected. ")
+    pred_s = " ".join(
+        f"{row['Model']}: B={row['B']:.4f}, Sig.={float(row['Sig.']):.4f} "
+        f"({'significant' if float(row['Sig.'])<0.05 else 'not significant'}, "
+        f"{'positive' if row['B']>0 else 'negative'} effect)."
+        for _,row in coefs[coefs["Model"]!="(Constant)"].iterrows())
+    doc.add_paragraph(
+        f"Normality: {norm_results['primary']} Sig.={norm_results['primary_p']:.4f} "
+        f"({'satisfied' if norm_results['passed'] else 'violated'}). "
+        f"{lin_s} {mc_s}"
+        f"Heteroscedasticity: {'satisfied' if glejser_passed else 'violated'}. "
+        f"Autocorrelation DW={dw_value:.4f}: {'satisfied' if dw_ok else 'violated'}.\n"
+        f"Regression: F={reg_results['F']:.4f}, Sig.={reg_results['p_F']:.4f} "
+        f"({'significant' if sig_model else 'not significant'}). "
+        f"R²={reg_results['R2']:.4f} ({r2_pct:.1f}% variance explained). "
+        f"Equation: {eq_str}. {pred_s}")
 
-    R2_pct = reg_results["R2"] * 100
-    F_val = reg_results["F"]
-    p_F = reg_results["p_F"]
-    sig_model = p_F < 0.05
-
-    conclusion = (
-        f"Prior to the regression analysis, all prerequisite assumption tests were conducted. "
-    )
-    if norm_results["passed"]:
-        conclusion += f"The {norm_results['primary']} normality test confirmed that residuals are normally distributed (Sig. = {norm_results['primary_p']:.3f} > 0.05). "
-    else:
-        conclusion += f"The normality assumption was violated (Sig. = {norm_results['primary_p']:.3f} < 0.05). "
-
-    for x_col, lr in lin_results.items():
-        if lr["passed"]:
-            conclusion += f"The linearity test confirmed a linear relationship between {x_col} and {y_col}. "
-        else:
-            conclusion += f"The linearity assumption between {x_col} and {y_col} was violated. "
-
-    if reg_type == "Multiple" and vif_df is not None:
-        mc_pass = all(vif_df["VIF"] < 10)
-        conclusion += f"No multicollinearity was detected (all VIF < 10). " if mc_pass else "Multicollinearity was detected. "
-
-    conclusion += f"The Glejser test showed {'no heteroscedasticity' if glejser_passed else 'heteroscedasticity'}. "
-    dw_pass = 1.5 <= dw_value <= 2.5
-    conclusion += f"The Durbin-Watson statistic (DW = {dw_value:.3f}) indicated {'no autocorrelation' if dw_pass else 'autocorrelation'}. "
-
-    conclusion += (
-        f"\n\nRegression analysis results showed that the model is "
-        f"{'statistically significant' if sig_model else 'not statistically significant'} "
-        f"(F = {F_val:.3f}, Sig. = {p_F:.3f}). "
-        f"The coefficient of determination (R²) = {reg_results['R2']:.3f}, indicating that "
-        f"{R2_pct:.1f}% of the variance in {y_col} is explained by {', '.join(x_cols)}. "
-        f"The regression equation is: {eq_str}. "
-    )
-
-    for _, row in reg_results["coef_df"][reg_results["coef_df"]["Model"] != "(Constant)"].iterrows():
-        sig_x = row["Sig."] < 0.05
-        direction = "positive" if row["B"] > 0 else "negative"
-        conclusion += (
-            f"{row['Model']} has a {direction} and "
-            f"{'significant' if sig_x else 'non-significant'} effect on {y_col} "
-            f"(B = {row['B']:.4f}, Sig. = {row['Sig.']:.3f}). "
-        )
-
-    add_para(conclusion)
-
-    # Save to bytes
-    buf = BytesIO()
-    doc.save(buf)
-    buf.seek(0)
+    buf = BytesIO(); doc.save(buf); buf.seek(0)
     return buf.read()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# HELPER UI
+# HELPERS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def fmt(val, decimals=4):
-    if val == "" or val is None:
-        return "-"
+def fmt(val, d=4):
     try:
-        if np.isnan(float(val)):
-            return "-"
-        return f"{float(val):.{decimals}f}"
+        v = float(val)
+        return "-" if np.isnan(v) else f"{v:.{d}f}"
     except Exception:
-        return str(val)
+        return str(val) if val not in ("", None) else "-"
 
-
-def sig_color(p):
-    try:
-        p = float(p)
-        if p < 0.05:
-            return "🟢" if p < 0.05 else ""
-        return ""
-    except Exception:
-        return ""
-
-
-def display_pass_fail(passed, pass_text="SATISFIED", fail_text="VIOLATED"):
-    if passed:
-        st.markdown(f'<span class="badge-pass">✓ {pass_text}</span>', unsafe_allow_html=True)
-    else:
-        st.markdown(f'<span class="badge-fail">✗ {fail_text}</span>', unsafe_allow_html=True)
-
-
-def display_coef_table(coef_df):
-    """Render coefficients table with colour-coded significance."""
-    cols = st.columns([2.5, 1.3, 1.3, 1.3, 1.3, 1.3])
-    headers = ["Model", "B", "Std. Error", "Beta", "t", "Sig."]
-    for col, h in zip(cols, headers):
-        col.markdown(f"**{h}**")
-    for _, row in coef_df.iterrows():
-        cols = st.columns([2.5, 1.3, 1.3, 1.3, 1.3, 1.3])
-        cols[0].write(row["Model"])
-        cols[1].write(fmt(row["B"]))
-        cols[2].write(fmt(row["Std. Error"]))
-        cols[3].write(fmt(row["Beta"]) if row["Beta"] != "" else "-")
-        cols[4].write(fmt(row["t"]))
-        try:
-            p = float(row["Sig."])
-            star = " *" if p < 0.05 else ""
-            cols[5].write(f"{p:.4f}{star}")
-        except Exception:
-            cols[5].write("-")
-
-
-def display_anova_table(anova_df):
-    cols = st.columns([2, 1.8, 1, 1.8, 1.5, 1.5])
-    headers = ["", "Sum of Squares", "df", "Mean Square", "F", "Sig."]
-    for col, h in zip(cols, headers):
-        col.markdown(f"**{h}**")
-    for _, row in anova_df.iterrows():
-        cols = st.columns([2, 1.8, 1, 1.8, 1.5, 1.5])
-        cols[0].write(row[""])
-        cols[1].write(fmt(row["Sum of Squares"]))
-        cols[2].write(str(int(row["df"])) if row["df"] != "" else "-")
-        cols[3].write(fmt(row["Mean Square"]) if row["Mean Square"] != "" else "-")
-        cols[4].write(fmt(row["F"]) if row["F"] != "" else "-")
-        try:
-            p = float(row["Sig."])
-            cols[5].write(f"{p:.4f}" + (" *" if p < 0.05 else ""))
-        except Exception:
-            cols[5].write("-")
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# RECOMMENDATIONS WHEN ASSUMPTION FAILS
-# ═══════════════════════════════════════════════════════════════════════════════
+def display_pass_fail(passed):
+    tag = "badge-pass" if passed else "badge-fail"
+    lbl = "✓ ASSUMPTION SATISFIED" if passed else "✗ ASSUMPTION VIOLATED"
+    st.markdown(f'<span class="{tag}">{lbl}</span>', unsafe_allow_html=True)
 
 RECOMMENDATIONS = {
-    "normality": """
-**Normality assumption violated. Recommended actions:**
-1. **Increase sample size** — larger samples tend toward normality (Central Limit Theorem applies at n > 30).
-2. **Transform data** — apply Log (LN) or Square Root (SQRT) transformation to Y, then re-run all tests.
-3. **Remove outliers** — check for extreme values using boxplots; remove only if theoretically justified.
-4. **Use non-parametric alternative** — consider Spearman correlation if the assumption cannot be met.
-""",
-    "linearity": """
-**Linearity assumption violated. Recommended actions:**
-1. **Transform variable** — try LN(X), SQRT(X), or LN(Y).
-2. **Polynomial regression** — add a squared term (X²) to capture a curvilinear relationship.
-3. **Non-linear regression** — if a specific curve is theoretically expected.
-4. **Review theory** — ensure that a linear relationship is theoretically justified.
-""",
-    "multicollinearity": """
-**Multicollinearity detected. Recommended actions:**
-1. **Remove one predictor** — if X1 and X2 measure very similar constructs, drop the less important one.
-2. **Combine variables** — create a composite score (average X1 and X2) if they measure the same thing.
-3. **Mean-center variables** — subtract the mean from each predictor before entering the model.
-4. **Increase sample size** — may reduce multicollinearity impact.
-""",
-    "heteroscedasticity": """
-**Heteroscedasticity detected. Recommended actions:**
-1. **Transform Y** — apply LN(Y) or SQRT(Y) to stabilize variance.
-2. **Weighted Least Squares (WLS)** — weight observations inversely to their variance.
-3. **Check for omitted variables** — missing predictors can cause unequal variance patterns.
-4. **Use robust standard errors** — if transformation is not suitable.
-""",
-    "autocorrelation": """
-**Autocorrelation detected. Recommended actions:**
-1. **Add lagged variable** — include Y at time t-1 as a predictor.
-2. **Difference the data** — transform Y to first differences (Yt − Yt-1).
-3. **Use time-series models** — ARIMA may be more appropriate if data is temporal.
-4. **Note:** If your data is cross-sectional (not time-series), autocorrelation is less of a concern.
-""",
+    "normality": "**Recommended actions:**\n1. **Increase sample size** — CLT helps at n > 30–50.\n2. **Transform data** — apply LN or SQRT to Y, re-run all tests.\n3. **Remove outliers** — only if theoretically justified.\n4. **Non-parametric alternative** — Spearman correlation.",
+    "linearity": "**Recommended actions:**\n1. **Transform variable** — try LN(X), SQRT(X), or LN(Y).\n2. **Polynomial regression** — add X² term.\n3. **Non-linear regression** — if a specific curve is expected.\n4. **Review theory** — confirm linear relationship is justified.",
+    "multicollinearity": "**Recommended actions:**\n1. **Remove one predictor** — drop the less important of correlated predictors.\n2. **Combine variables** — create a composite score.\n3. **Mean-center variables** — subtract column mean from each predictor.\n4. **Increase sample size.**",
+    "heteroscedasticity": "**Recommended actions:**\n1. **Transform Y** — LN(Y) or SQRT(Y) to stabilise variance.\n2. **Weighted Least Squares (WLS).**\n3. **Check for omitted variables.**",
+    "autocorrelation": "**Recommended actions:**\n1. **Add lagged variable** — include Yt-1 as predictor.\n2. **Difference the data** — transform Y to Yt − Yt-1.\n3. **Time-series models** — ARIMA if data is temporal.\n4. Note: less critical for cross-sectional data.",
 }
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# MAIN APP
+# MAIN
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def main():
-    # ── Header ────────────────────────────────────────────────────────────
     st.markdown("""
-    <div style="padding: 2rem 0 1rem 0;">
+    <div style="padding:1.5rem 0 0.5rem 0;">
         <div class="main-title">Regression Analyzer</div>
-        <div class="main-subtitle">
-            SPSS-equivalent Simple &amp; Multiple Linear Regression · Automatic assumption testing · Downloadable report
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+        <div class="main-subtitle">SPSS-equivalent Simple &amp; Multiple Linear Regression · Automatic assumption tests · Downloadable Word report</div>
+    </div><hr class="divider">""", unsafe_allow_html=True)
 
-    st.markdown('<hr class="divider">', unsafe_allow_html=True)
-
-    # ── Step 1: Regression type ───────────────────────────────────────────
+    # Step 1
     st.markdown('<div class="step-badge">Step 01</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-header">Choose Regression Type</div>',
-                unsafe_allow_html=True)
-
-    reg_type = st.radio(
-        "Regression type",
-        ["Simple Regression (1 X, 1 Y)", "Multiple Regression (2+ X, 1 Y)"],
-        horizontal=True,
-        label_visibility="collapsed",
-    )
-    reg_type = "Simple" if "Simple" in reg_type else "Multiple"
-
+    st.markdown('<div class="section-header">Choose Regression Type</div>', unsafe_allow_html=True)
+    reg_choice = st.radio("type", ["Simple Regression (1 X, 1 Y)", "Multiple Regression (2+ X, 1 Y)"],
+                          horizontal=True, label_visibility="collapsed")
+    reg_type = "Simple" if "Simple" in reg_choice else "Multiple"
     st.markdown('<hr class="divider">', unsafe_allow_html=True)
 
-    # ── Step 2: Upload ────────────────────────────────────────────────────
+    # Step 2
     st.markdown('<div class="step-badge">Step 02</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-header">Upload CSV Data</div>',
-                unsafe_allow_html=True)
-
+    st.markdown('<div class="section-header">Upload CSV Data</div>', unsafe_allow_html=True)
     st.markdown("""
     <div class="interp-box">
-    <b>Required CSV format:</b> First row = column headers. Each subsequent row = one respondent.
-    All data columns must be numeric. Separator: comma (,). Encoding: UTF-8.<br><br>
-    <b>Example (Simple):</b> <code>respondent_id, X, Y</code><br>
-    <b>Example (Multiple):</b> <code>respondent_id, X1, X2, Y</code><br>
-    Column names can be anything — you will select which columns are X and Y below.
-    </div>
-    """, unsafe_allow_html=True)
+    <b>CSV rules:</b> First row = column headers. Each row = one respondent. All analysis columns must be numeric.
+    Separator: comma (,). Encoding: UTF-8.<br><br>
+    <b>Simple example:</b> <code>respondent_id, Motivation_X, Score_Y</code><br>
+    <b>Multiple example:</b> <code>respondent_id, Teaching_X1, Motivation_X2, Score_Y</code>
+    </div>""", unsafe_allow_html=True)
 
-    uploaded_file = st.file_uploader(
-        "Upload your CSV file", type=["csv"],
-        label_visibility="collapsed"
-    )
-
-    if uploaded_file is None:
-        st.info("⬆️  Please upload a CSV file to begin.")
-        return
+    uploaded = st.file_uploader("Upload CSV", type=["csv"], label_visibility="collapsed")
+    if uploaded is None:
+        st.info("⬆️  Upload a CSV file to begin."); return
 
     try:
-        df = pd.read_csv(uploaded_file)
+        df = pd.read_csv(uploaded)
     except Exception as e:
-        st.error(f"Failed to read CSV: {e}")
-        return
+        st.error(f"Could not read CSV: {e}"); return
 
-    st.success(f"✓ File loaded — {len(df)} rows, {len(df.columns)} columns")
-
-    with st.expander("Preview Data", expanded=False):
+    st.success(f"✓ File loaded — {len(df):,} rows · {len(df.columns)} columns")
+    with st.expander("Preview data (first 20 rows)", expanded=False):
         st.dataframe(df.head(20), use_container_width=True)
 
-    # Check numeric columns
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
     if len(numeric_cols) < 2:
-        st.error("Your CSV must have at least 2 numeric columns.")
-        return
+        st.error("Your CSV must contain at least 2 numeric columns."); return
 
-    # Missing value check
     missing = df[numeric_cols].isnull().sum()
     if missing.any():
-        st.warning(
-            f"Missing values detected: {missing[missing > 0].to_dict()}. "
-            "Rows with missing values will be dropped automatically."
-        )
+        st.warning(f"Missing values detected: {missing[missing>0].to_dict()}. Will be dropped.")
         df = df.dropna(subset=numeric_cols)
 
     st.markdown('<hr class="divider">', unsafe_allow_html=True)
 
-    # ── Step 3: Variable mapping ──────────────────────────────────────────
+    # Step 3
     st.markdown('<div class="step-badge">Step 03</div>', unsafe_allow_html=True)
-    st.markdown('<div class="section-header">Map Variables</div>',
-                unsafe_allow_html=True)
-
-    col_left, col_right = st.columns(2)
-    with col_left:
-        y_col = st.selectbox("Dependent Variable (Y)", numeric_cols)
-
+    st.markdown('<div class="section-header">Map Variables</div>', unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    with c1: y_col = st.selectbox("Dependent Variable (Y)", numeric_cols)
     remaining = [c for c in numeric_cols if c != y_col]
-
     if reg_type == "Simple":
-        with col_right:
-            x_col = st.selectbox("Independent Variable (X)", remaining)
+        with c2: x_col = st.selectbox("Independent Variable (X)", remaining)
         x_cols = [x_col]
     else:
-        with col_right:
-            x_cols = st.multiselect(
-                "Independent Variables (X1, X2, ...)",
-                remaining,
-                default=remaining[:min(2, len(remaining))]
-            )
+        with c2:
+            x_cols = st.multiselect("Independent Variables (X1, X2, …)", remaining,
+                                    default=remaining[:min(2, len(remaining))])
         if len(x_cols) < 2:
-            st.warning("Please select at least 2 independent variables for Multiple Regression.")
-            return
-
+            st.warning("Select at least 2 independent variables."); return
     if not x_cols:
-        st.warning("Please select at least one independent variable.")
-        return
+        st.warning("Select at least one independent variable."); return
 
-    # Prepare arrays
-    y = df[y_col].astype(float)
-    X_df = df[x_cols].astype(float)
-
-    st.markdown(f"""
-    <div class="interp-box">
-    <b>Model:</b> {y_col} = f({', '.join(x_cols)})<br>
-    <b>Sample size (n):</b> {len(y)}
-    </div>
-    """, unsafe_allow_html=True)
-
+    y    = df[y_col].astype(float).reset_index(drop=True)
+    X_df = df[x_cols].astype(float).reset_index(drop=True)
+    st.markdown(f'<div class="interp-box"><b>Model:</b> {y_col} = f({", ".join(x_cols)}) &nbsp;·&nbsp; <b>n = {len(y)}</b></div>',
+                unsafe_allow_html=True)
     st.markdown('<hr class="divider">', unsafe_allow_html=True)
 
-    # ═══════════════════════════════════════════════════════════════════════
-    # AUTO-RUN ALL TESTS
-    # ═══════════════════════════════════════════════════════════════════════
+    # Step 4 — run analysis
+    st.markdown('<div class="step-badge">Step 04 — Automatic</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">Prerequisite Assumption Tests</div>', unsafe_allow_html=True)
 
-    st.markdown('<div class="step-badge">Step 04 — Automatic</div>',
-                unsafe_allow_html=True)
-    st.markdown('<div class="section-header">Prerequisite Assumption Tests</div>',
-                unsafe_allow_html=True)
-
-    figs_bytes = {}
-    all_passed = True
-
-    # ── First run regression to get residuals ─────────────────────────────
-    with st.spinner("Running analysis…"):
+    figs_bytes = {}; all_passed = True
+    with st.spinner("Running full analysis…"):
         reg_results = run_regression(y, X_df)
-        residuals = reg_results["residuals"]
-        fitted = reg_results["fitted"]
+    residuals = reg_results["residuals"]
+    fitted    = reg_results["fitted"]
 
-    # ─────────────────────────────────────────────────────────────────────
-    # TEST 1: NORMALITY
-    # ─────────────────────────────────────────────────────────────────────
-    st.markdown("### 1 · Normality Test of Residuals")
-
-    norm_res = run_normality(residuals)
+    # ── Normality ──────────────────────────────────────────────────────────
+    st.markdown("### 📋 Test 1 · Normality of Residuals")
+    norm_res    = run_normality(residuals)
     norm_passed = norm_res["passed"]
-    if not norm_passed:
-        all_passed = False
+    if not norm_passed: all_passed = False
 
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("n", norm_res["n"])
-    col2.metric("Shapiro-Wilk W", f"{norm_res['sw_stat']:.4f}")
-    col3.metric("Shapiro-Wilk Sig.", f"{norm_res['sw_p']:.4f}")
-    col4.metric("Recommended Test", norm_res["primary"])
+    ca,cb,cc,cd = st.columns(4)
+    ca.metric("n",                         str(norm_res["n"]))
+    cb.metric("Shapiro-Wilk W",            f"{norm_res['sw_stat']:.4f}")
+    cc.metric("Shapiro-Wilk Sig.",          f"{norm_res['sw_p']:.4f}")
+    cd.metric("KS Lilliefors Sig.",         f"{norm_res['ks_p']:.4f}")
 
     norm_tbl = pd.DataFrame([
-        {"Test": "Kolmogorov-Smirnov",
-         "Statistic": f"{norm_res['ks_stat']:.4f}",
-         "Sig.": f"{norm_res['ks_p']:.4f}",
-         "df": norm_res["n"],
-         "Note": "← Use if n > 50" if norm_res["n"] > 50 else ""},
-        {"Test": "Shapiro-Wilk",
-         "Statistic": f"{norm_res['sw_stat']:.4f}",
-         "Sig.": f"{norm_res['sw_p']:.4f}",
-         "df": norm_res["n"],
-         "Note": "← Use if n ≤ 50" if norm_res["n"] <= 50 else ""},
+        {"Test":"Kolmogorov-Smirnov (Lilliefors)","Statistic":f"{norm_res['ks_stat']:.4f}","df":norm_res['n'],"Sig.":f"{norm_res['ks_p']:.4f}","Recommended when":"n > 50"},
+        {"Test":"Shapiro-Wilk",                   "Statistic":f"{norm_res['sw_stat']:.4f}","df":norm_res['n'],"Sig.":f"{norm_res['sw_p']:.4f}","Recommended when":"n ≤ 50"},
     ])
     st.dataframe(norm_tbl, use_container_width=True, hide_index=True)
-
-    primary_p = norm_res["primary_p"]
     display_pass_fail(norm_passed)
+    pp = norm_res["primary_p"]
     st.markdown(f"""
     <div class="interp-box">
-    Based on the <b>{norm_res['primary']}</b> test (appropriate for n = {norm_res['n']}),
-    the significance value is <b>{primary_p:.4f}</b>
-    ({'> 0.05' if primary_p > 0.05 else '< 0.05'}).
-    The residuals are <b>{'normally distributed' if norm_passed else 'NOT normally distributed'}</b>.
-    Normality assumption: <b>{'SATISFIED ✓' if norm_passed else 'VIOLATED ✗'}</b>.
-    </div>
-    """, unsafe_allow_html=True)
-
+    <b>Primary test:</b> {norm_res['primary']} (n = {norm_res['n']} {'≤ 50' if norm_res['n']<=50 else '> 50'}).<br>
+    Sig. = <b>{pp:.4f}</b> ({'> 0.05 ✓ normally distributed' if pp>0.05 else '< 0.05 ✗ NOT normally distributed'}).<br>
+    <b>Note:</b> SPSS applies <i>Lilliefors correction</i> to the KS statistic.
+    This app uses <code>statsmodels.stats.diagnostic.lilliefors()</code> — identical correction.
+    </div>""", unsafe_allow_html=True)
     if not norm_passed:
         with st.expander("💡 Recommendations — Normality Violated"):
             st.markdown(RECOMMENDATIONS["normality"])
 
     fig_norm = plot_normality(residuals)
     figs_bytes["normality"] = fig_to_bytes(fig_norm)
-    st.pyplot(fig_norm, use_container_width=True)
-    plt.close(fig_norm)
-
+    st.pyplot(fig_norm, use_container_width=True); plt.close(fig_norm)
     st.markdown('<hr class="divider">', unsafe_allow_html=True)
 
-    # ─────────────────────────────────────────────────────────────────────
-    # TEST 2: LINEARITY
-    # ─────────────────────────────────────────────────────────────────────
-    st.markdown("### 2 · Linearity Test")
-
+    # ── Linearity ──────────────────────────────────────────────────────────
+    st.markdown("### 📋 Test 2 · Linearity")
     lin_results = {}
-    for x_col in x_cols:
-        st.markdown(f"**{x_col} → {y_col}**")
-        lr = run_linearity(X_df[x_col], y)
-        lin_results[x_col] = lr
-        if not lr["passed"]:
-            all_passed = False
-
+    for xc in x_cols:
+        st.markdown(f"**{xc} → {y_col}**")
+        lr = run_linearity(X_df[xc], y)
+        lin_results[xc] = lr
+        if not lr["passed"]: all_passed = False
+        ss_comb = lr["ss_reg"] + (lr["ss_dev"] if not np.isnan(lr.get("ss_dev", np.nan)) else 0)
         lin_tbl = pd.DataFrame([
-            {"Source": "Between Groups (Combined)",
-             "Sum of Squares": f"{lr['ss_reg'] + lr['ss_dev']:.4f}",
-             "df": lr["df_lin"] + (lr["df_dev"] if lr["df_dev"] > 0 else 0),
-             "Mean Square": "-", "F": "-", "Sig.": "-"},
-            {"Source": "  Linearity",
-             "Sum of Squares": f"{lr['ss_reg']:.4f}",
-             "df": lr["df_lin"],
-             "Mean Square": f"{lr['ms_lin']:.4f}",
-             "F": f"{lr['F_lin']:.4f}" if not np.isnan(lr['F_lin']) else "-",
-             "Sig.": f"{lr['p_lin']:.4f}" if not np.isnan(lr['p_lin']) else "-"},
-            {"Source": "  Deviation from Linearity",
-             "Sum of Squares": f"{lr['ss_dev']:.4f}",
-             "df": lr["df_dev"] if lr["df_dev"] > 0 else "-",
-             "Mean Square": f"{lr['ms_dev']:.4f}" if (lr["df_dev"] > 0 and not np.isnan(lr["ms_dev"])) else "-",
-             "F": f"{lr['F_dev']:.4f}" if (lr["df_dev"] > 0 and not np.isnan(lr["F_dev"])) else "-",
-             "Sig.": f"{lr['p_dev']:.4f}" if (lr["df_dev"] > 0 and not np.isnan(lr["p_dev"])) else "-"},
-            {"Source": "Within Groups",
-             "Sum of Squares": f"{lr['ss_within']:.4f}",
-             "df": lr["df_within"],
-             "Mean Square": f"{lr['ms_within']:.4f}",
-             "F": "-", "Sig.": "-"},
+            {"Source":"Between Groups (Combined)","SS":fmt(ss_comb),"df":"-","MS":"-","F":"-","Sig.":"-"},
+            {"Source":"  Linearity","SS":fmt(lr["ss_reg"]),"df":lr["df_lin"],"MS":fmt(lr["ms_lin"]),"F":fmt(lr["F_lin"]),"Sig.":fmt(lr["p_lin"])},
+            {"Source":"  Deviation from Linearity","SS":fmt(lr.get("ss_dev",np.nan)),"df":lr["df_dev"] if lr["df_dev"]>0 else "-","MS":fmt(lr.get("ms_dev",np.nan)),"F":fmt(lr.get("F_dev",np.nan)),"Sig.":fmt(lr.get("p_dev",np.nan))},
+            {"Source":"Within Groups","SS":fmt(lr.get("ss_within",np.nan)),"df":lr["df_within"],"MS":fmt(lr.get("ms_within",np.nan)),"F":"-","Sig.":"-"},
         ])
         st.dataframe(lin_tbl, use_container_width=True, hide_index=True)
-
         display_pass_fail(lr["passed"])
-        p_lin_str = f"{lr['p_lin']:.4f}" if not np.isnan(lr['p_lin']) else "N/A"
-        p_dev_str = f"{lr['p_dev']:.4f}" if (lr["df_dev"] > 0 and not np.isnan(lr["p_dev"])) else "N/A"
-        continuous_note = ""
-        if lr.get("continuous_x"):
-            continuous_note = "<br><i>Note: X contains all unique values (continuous variable) — Deviation from Linearity cannot be computed. OLS F-test used for Linearity.</i>"
+        cont_note = ("<br><i>Note: X has all unique values (continuous) — Deviation from Linearity cannot be computed; OLS F-test used instead.</i>"
+                     if lr.get("continuous_x") else "")
+        p_lin_v = lr["p_lin"]; p_dev_v = lr.get("p_dev", np.nan)
+        pls = fmt(p_lin_v); pds = fmt(p_dev_v)
+        lin_ok_note = "(< 0.05 ✓)" if (not np.isnan(float(p_lin_v)) and float(p_lin_v)<0.05) else "(> 0.05 ✗)"
+        dev_ok_note = "(> 0.05 ✓)" if (pds!="-" and not np.isnan(float(pds)) and float(pds)>0.05) else ""
         st.markdown(f"""
         <div class="interp-box">
-        Sig. Linearity = <b>{p_lin_str}</b> {'(< 0.05 ✓)' if (not np.isnan(lr['p_lin']) and lr['p_lin'] < 0.05) else '(> 0.05 ✗)'} &nbsp;|&nbsp;
-        Sig. Deviation from Linearity = <b>{p_dev_str}</b>
-        {'(> 0.05 ✓)' if (lr["df_dev"] > 0 and not np.isnan(lr.get("p_dev", float("nan"))) and lr["p_dev"] > 0.05) else ''}.{continuous_note}<br>
-        The relationship between <b>{x_col}</b> and <b>{y_col}</b> is
-        <b>{'linear ✓' if lr['passed'] else 'NOT confirmed as linear ✗'}</b>.
-        </div>
-        """, unsafe_allow_html=True)
-
+        Sig. Linearity = <b>{pls}</b> {lin_ok_note} &nbsp;|&nbsp;
+        Sig. Deviation from Linearity = <b>{pds}</b> {dev_ok_note}.{cont_note}<br>
+        {xc} → {y_col}: <b>{'linear ✓' if lr['passed'] else 'NOT confirmed as linear ✗'}</b>
+        </div>""", unsafe_allow_html=True)
         if not lr["passed"]:
-            with st.expander(f"💡 Recommendations — Linearity Violated ({x_col})"):
+            with st.expander(f"💡 Recommendations — Linearity Violated ({xc})"):
                 st.markdown(RECOMMENDATIONS["linearity"])
-
     st.markdown('<hr class="divider">', unsafe_allow_html=True)
 
-    # ─────────────────────────────────────────────────────────────────────
-    # TEST 3: MULTICOLLINEARITY (multiple only)
-    # ─────────────────────────────────────────────────────────────────────
+    # ── Multicollinearity ──────────────────────────────────────────────────
     vif_df = None
     if reg_type == "Multiple":
-        st.markdown("### 3 · Multicollinearity Test")
-        vif_df = run_vif(X_df)
-        mc_passed = all(vif_df["VIF"] < 10) and all(vif_df["Tolerance"] > 0.10)
-        if not mc_passed:
-            all_passed = False
-
-        vif_display = vif_df.copy()
-        vif_display["Tolerance"] = vif_display["Tolerance"].map("{:.4f}".format)
-        vif_display["VIF"] = vif_display["VIF"].map("{:.4f}".format)
-        st.dataframe(vif_display, use_container_width=True, hide_index=True)
-
+        st.markdown("### 📋 Test 3 · Multicollinearity")
+        vif_df    = run_vif(X_df)
+        mc_passed = all(vif_df["VIF"]<10) and all(vif_df["Tolerance"]>0.10)
+        if not mc_passed: all_passed = False
+        vif_disp = vif_df.copy()
+        vif_disp["Tolerance"] = vif_disp["Tolerance"].map("{:.4f}".format)
+        vif_disp["VIF"]       = vif_disp["VIF"].map("{:.4f}".format)
+        st.dataframe(vif_disp, use_container_width=True, hide_index=True)
         display_pass_fail(mc_passed)
+        max_vif = float(vif_df["VIF"].max())
         st.markdown(f"""
         <div class="interp-box">
-        Tolerance criterion: > 0.10 &nbsp;|&nbsp; VIF criterion: < 10.0.<br>
-        {'All variables meet both criteria — no multicollinearity detected.' if mc_passed
-         else 'One or more variables violate the multicollinearity thresholds.'}
-        Multicollinearity assumption: <b>{'SATISFIED ✓' if mc_passed else 'VIOLATED ✗'}</b>.
-        </div>
-        """, unsafe_allow_html=True)
-
+        Criterion: Tolerance > 0.10 AND VIF < 10.<br>
+        Max VIF = <b>{max_vif:.4f}</b> ({'< 10 ✓' if max_vif<10 else '≥ 10 ✗'}).
+        {'No multicollinearity.' if mc_passed else 'Multicollinearity detected — coefficients unreliable.'}
+        </div>""", unsafe_allow_html=True)
         if not mc_passed:
-            with st.expander("💡 Recommendations — Multicollinearity Detected"):
+            with st.expander("💡 Recommendations — Multicollinearity"):
                 st.markdown(RECOMMENDATIONS["multicollinearity"])
-
         st.markdown('<hr class="divider">', unsafe_allow_html=True)
 
-    # ─────────────────────────────────────────────────────────────────────
-    # TEST 4: HETEROSCEDASTICITY
-    # ─────────────────────────────────────────────────────────────────────
-    sec_num = 4 if reg_type == "Multiple" else 3
-    st.markdown(f"### {sec_num} · Heteroscedasticity Test (Glejser + Scatterplot)")
-
+    # ── Heteroscedasticity ─────────────────────────────────────────────────
+    sec_h = 4 if reg_type=="Multiple" else 3
+    st.markdown(f"### 📋 Test {sec_h} · Heteroscedasticity (Glejser + Scatterplot)")
     glejser_df, glejser_passed, _ = run_glejser(residuals, X_df)
-    if not glejser_passed:
-        all_passed = False
-
-    # Format display
-    glejser_display = glejser_df.copy()
-    for col in ["B", "Std. Error", "t"]:
-        glejser_display[col] = glejser_display[col].map("{:.4f}".format)
-    glejser_display["Sig."] = glejser_display["Sig."].map("{:.4f}".format)
-    st.dataframe(glejser_display, use_container_width=True, hide_index=True)
-
+    if not glejser_passed: all_passed = False
+    g_disp = glejser_df.copy()
+    for col in ["B","Std. Error","t","Sig."]: g_disp[col] = g_disp[col].map("{:.4f}".format)
+    st.dataframe(g_disp, use_container_width=True, hide_index=True)
     display_pass_fail(glejser_passed)
-    sig_vals = glejser_df[glejser_df["Term"] != "(Constant)"]["Sig."].tolist()
-    sig_str = ", ".join([f"{s:.4f}" for s in sig_vals])
+    sig_vals = glejser_df[glejser_df["Term"]!="(Constant)"]["Sig."].tolist()
+    sig_str  = ", ".join(f"{s:.4f}" for s in sig_vals)
     st.markdown(f"""
     <div class="interp-box">
-    Glejser test — regressing |residuals| on predictor(s).<br>
-    Sig. values for predictors: <b>{sig_str}</b>
-    ({'all > 0.05 ✓' if glejser_passed else 'at least one < 0.05 ✗'}).<br>
-    Heteroscedasticity assumption: <b>{'SATISFIED (no heteroscedasticity) ✓' if glejser_passed else 'VIOLATED (heteroscedasticity present) ✗'}</b>.
-    </div>
-    """, unsafe_allow_html=True)
-
+    Predictor Sig. values: <b>{sig_str}</b>
+    ({'all > 0.05 ✓ — no heteroscedasticity' if glejser_passed else 'at least one < 0.05 ✗ — heteroscedasticity detected'}).<br>
+    Scatterplot (ZRESID vs ZPRED): random scatter around 0 indicates homoscedasticity.
+    </div>""", unsafe_allow_html=True)
     if not glejser_passed:
-        with st.expander("💡 Recommendations — Heteroscedasticity Detected"):
+        with st.expander("💡 Recommendations — Heteroscedasticity"):
             st.markdown(RECOMMENDATIONS["heteroscedasticity"])
-
-    # Scatterplot ZRESID vs ZPRED
     fig_scatter = plot_scatter_residuals(fitted, residuals)
     figs_bytes["scatter"] = fig_to_bytes(fig_scatter)
-    st.pyplot(fig_scatter, use_container_width=True)
-    plt.close(fig_scatter)
-
+    st.pyplot(fig_scatter, use_container_width=True); plt.close(fig_scatter)
     st.markdown('<hr class="divider">', unsafe_allow_html=True)
 
-    # ─────────────────────────────────────────────────────────────────────
-    # TEST 5: AUTOCORRELATION
-    # ─────────────────────────────────────────────────────────────────────
-    sec_num2 = 5 if reg_type == "Multiple" else 4
-    st.markdown(f"### {sec_num2} · Autocorrelation Test (Durbin-Watson)")
-
-    dw_value = reg_results["dw"]
+    # ── Autocorrelation ────────────────────────────────────────────────────
+    sec_a = 5 if reg_type=="Multiple" else 4
+    st.markdown(f"### 📋 Test {sec_a} · Autocorrelation (Durbin-Watson)")
+    dw_value  = reg_results["dw"]
     dw_passed = 1.5 <= dw_value <= 2.5
-    if not dw_passed:
-        all_passed = False
-
-    col_a, col_b, col_c = st.columns(3)
-    col_a.metric("Durbin-Watson", f"{dw_value:.4f}")
-    col_b.metric("Acceptable Range", "1.5 – 2.5")
-    col_c.metric("Status", "PASS ✓" if dw_passed else "FAIL ✗")
-
+    if not dw_passed: all_passed = False
+    ca,cb,cc = st.columns(3)
+    ca.metric("Durbin-Watson", f"{dw_value:.4f}")
+    cb.metric("Acceptable Range", "1.5 – 2.5")
+    cc.metric("Status", "PASS ✓" if dw_passed else "FAIL ✗")
     display_pass_fail(dw_passed)
     st.markdown(f"""
     <div class="interp-box">
-    Durbin-Watson statistic = <b>{dw_value:.4f}</b>
-    ({'within' if dw_passed else 'outside'} the acceptable range of 1.5 to 2.5).<br>
+    DW = <b>{dw_value:.4f}</b> ({'within' if dw_passed else 'outside'} 1.5 – 2.5).<br>
     {'No autocorrelation detected.' if dw_passed else
-     ('Positive autocorrelation detected (DW < 1.5).' if dw_value < 1.5
-      else 'Negative autocorrelation detected (DW > 2.5).')}
-    Autocorrelation assumption: <b>{'SATISFIED ✓' if dw_passed else 'VIOLATED ✗'}</b>.
-    </div>
-    """, unsafe_allow_html=True)
-
+     ('Positive autocorrelation detected (DW < 1.5).' if dw_value<1.5 else 'Negative autocorrelation detected (DW > 2.5).')}
+    </div>""", unsafe_allow_html=True)
     if not dw_passed:
-        with st.expander("💡 Recommendations — Autocorrelation Detected"):
+        with st.expander("💡 Recommendations — Autocorrelation"):
             st.markdown(RECOMMENDATIONS["autocorrelation"])
-
     st.markdown('<hr class="divider">', unsafe_allow_html=True)
 
-    # ─────────────────────────────────────────────────────────────────────
-    # ASSUMPTION SUMMARY
-    # ─────────────────────────────────────────────────────────────────────
-    st.markdown("### Assumption Tests Summary")
-
-    summary_rows = [
-        {"Test": "Normality (Residuals)", "Key Statistic": f"{norm_res['primary']} Sig. = {norm_res['primary_p']:.4f}", "Result": "✓ SATISFIED" if norm_passed else "✗ VIOLATED"},
-    ]
-    for x_col, lr in lin_results.items():
-        summary_rows.append({
-            "Test": f"Linearity ({x_col} → {y_col})",
-            "Key Statistic": f"Sig. Lin. = {lr['p_lin']:.4f}",
-            "Result": "✓ SATISFIED" if lr["passed"] else "✗ VIOLATED"
-        })
-    if reg_type == "Multiple" and vif_df is not None:
-        mc_p = all(vif_df["VIF"] < 10)
-        summary_rows.append({
-            "Test": "Multicollinearity",
-            "Key Statistic": f"Max VIF = {vif_df['VIF'].max():.4f}",
-            "Result": "✓ SATISFIED" if mc_p else "✗ VIOLATED"
-        })
-    summary_rows.append({
-        "Test": "Heteroscedasticity (Glejser)",
-        "Key Statistic": f"Min Sig. = {glejser_df[glejser_df['Term'] != '(Constant)']['Sig.'].min():.4f}",
-        "Result": "✓ SATISFIED" if glejser_passed else "✗ VIOLATED"
-    })
-    summary_rows.append({
-        "Test": "Autocorrelation (Durbin-Watson)",
-        "Key Statistic": f"DW = {dw_value:.4f}",
-        "Result": "✓ SATISFIED" if dw_passed else "✗ VIOLATED"
-    })
-
-    st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
-
+    # ── Summary ────────────────────────────────────────────────────────────
+    st.markdown("### 📊 Assumption Tests Summary")
+    summary = [{"Test":"1 · Normality (Residuals)",
+                "Key Statistic":f"{norm_res['primary']} Sig. = {norm_res['primary_p']:.4f}",
+                "Result":"✓ SATISFIED" if norm_passed else "✗ VIOLATED"}]
+    for xc,lr in lin_results.items():
+        summary.append({"Test":f"2 · Linearity ({xc}→{y_col})",
+                        "Key Statistic":f"Sig. Linearity = {fmt(lr['p_lin'])}",
+                        "Result":"✓ SATISFIED" if lr["passed"] else "✗ VIOLATED"})
+    if reg_type=="Multiple" and vif_df is not None:
+        mc_ok = all(vif_df["VIF"]<10)
+        summary.append({"Test":"3 · Multicollinearity",
+                        "Key Statistic":f"Max VIF = {float(vif_df['VIF'].max()):.4f}",
+                        "Result":"✓ SATISFIED" if mc_ok else "✗ VIOLATED"})
+    summary.append({"Test":f"{sec_h} · Heteroscedasticity (Glejser)",
+                    "Key Statistic":f"Min predictor Sig. = {min(sig_vals):.4f}",
+                    "Result":"✓ SATISFIED" if glejser_passed else "✗ VIOLATED"})
+    summary.append({"Test":f"{sec_a} · Autocorrelation (DW)",
+                    "Key Statistic":f"DW = {dw_value:.4f}",
+                    "Result":"✓ SATISFIED" if dw_passed else "✗ VIOLATED"})
+    st.dataframe(pd.DataFrame(summary), use_container_width=True, hide_index=True)
     if all_passed:
-        st.success("✅ All prerequisite assumptions are satisfied. Proceeding to regression analysis.")
+        st.success("✅ All assumptions satisfied — regression results below are fully valid.")
     else:
-        st.warning(
-            "⚠️ One or more assumptions are violated. Review recommendations above. "
-            "Regression results are displayed below for reference, but interpret with caution."
-        )
-
+        st.warning("⚠️ One or more assumptions violated. See recommendations above. Results shown for reference.")
     st.markdown('<hr class="divider">', unsafe_allow_html=True)
 
-    # ═════════════════════════════════════════════════════════════════════
-    # REGRESSION RESULTS
-    # ═════════════════════════════════════════════════════════════════════
-    sec_num3 = 6 if reg_type == "Multiple" else 5
-    st.markdown(f'<div class="section-header">{sec_num3} · Regression Analysis Results</div>',
-                unsafe_allow_html=True)
+    # ── Regression Results ─────────────────────────────────────────────────
+    sec_r = 6 if reg_type=="Multiple" else 5
+    st.markdown(f'<div class="section-header">{sec_r} · Regression Analysis Results</div>', unsafe_allow_html=True)
 
-    # ── Model Summary ─────────────────────────────────────────────────────
     st.markdown("#### Model Summary")
-    ms_cols = st.columns(5)
-    ms_cols[0].metric("R", f"{reg_results['R']:.4f}")
-    ms_cols[1].metric("R Square", f"{reg_results['R2']:.4f}")
-    ms_cols[2].metric("Adjusted R²", f"{reg_results['adj_R2']:.4f}")
-    ms_cols[3].metric("Std. Error of Estimate", f"{reg_results['se_est']:.4f}")
-    ms_cols[4].metric("Durbin-Watson", f"{reg_results['dw']:.4f}")
-
-    r2_pct = reg_results["R2"] * 100
+    mc1,mc2,mc3,mc4,mc5 = st.columns(5)
+    mc1.metric("R",                  f"{reg_results['R']:.4f}")
+    mc2.metric("R Square",           f"{reg_results['R2']:.4f}")
+    mc3.metric("Adjusted R²",        f"{reg_results['adj_R2']:.4f}")
+    mc4.metric("Std. Error of Est.", f"{reg_results['se_est']:.4f}")
+    mc5.metric("Durbin-Watson",      f"{reg_results['dw']:.4f}")
+    r2_pct = reg_results["R2"]*100
     st.markdown(f"""
     <div class="interp-box">
-    R = <b>{reg_results['R']:.4f}</b> — correlation between predicted and observed Y.<br>
-    R² = <b>{reg_results['R2']:.4f}</b> — <b>{r2_pct:.1f}%</b> of the variance in <b>{y_col}</b>
-    is explained by {', '.join(x_cols)}.<br>
-    Adjusted R² = <b>{reg_results['adj_R2']:.4f}</b> (accounts for number of predictors and sample size).
-    </div>
-    """, unsafe_allow_html=True)
-
+    <b>R = {reg_results['R']:.4f}</b> — correlation strength between predicted and actual {y_col}.<br>
+    <b>R² = {reg_results['R2']:.4f}</b> — <b>{r2_pct:.1f}%</b> of variance in <b>{y_col}</b> explained by {', '.join(x_cols)}.<br>
+    <b>Adjusted R² = {reg_results['adj_R2']:.4f}</b> — corrected for number of predictors and sample size.
+    </div>""", unsafe_allow_html=True)
     st.markdown('<hr class="divider">', unsafe_allow_html=True)
 
-    # ── ANOVA ─────────────────────────────────────────────────────────────
     st.markdown("#### ANOVA")
-    display_anova_table(reg_results["anova"])
-
+    anova_disp = reg_results["anova"].copy()
+    for col in ["Sum of Squares","Mean Square","F","Sig."]:
+        anova_disp[col] = anova_disp[col].apply(lambda v: fmt(v) if v!="" else "-")
+    anova_disp["df"] = anova_disp["df"].apply(lambda v: str(int(v)) if v!="" else "-")
+    st.dataframe(anova_disp, use_container_width=True, hide_index=True)
     sig_model = reg_results["p_F"] < 0.05
     st.markdown(f"""
     <div class="interp-box">
     F = <b>{reg_results['F']:.4f}</b>, Sig. = <b>{reg_results['p_F']:.4f}</b>
     ({'< 0.05' if sig_model else '> 0.05'}).<br>
-    The regression model is <b>{'statistically significant ✓' if sig_model else 'NOT statistically significant ✗'}</b>.
-    {'The independent variable(s) significantly predict ' + y_col + '.' if sig_model
-     else 'The model cannot reliably predict ' + y_col + '.'}
-    </div>
-    """, unsafe_allow_html=True)
-
+    Model is <b>{'statistically significant ✓' if sig_model else 'NOT statistically significant ✗'}</b>.
+    </div>""", unsafe_allow_html=True)
     st.markdown('<hr class="divider">', unsafe_allow_html=True)
 
-    # ── Coefficients ──────────────────────────────────────────────────────
     st.markdown("#### Coefficients")
-    display_coef_table(reg_results["coef_df"])
-
-    # Regression equation
     coefs = reg_results["coef_df"]
-    const_val = coefs.loc[coefs["Model"] == "(Constant)", "B"].values[0]
-    eq_parts = [f"{const_val:.4f}"]
-    interp_parts = []
-    for _, row in coefs[coefs["Model"] != "(Constant)"].iterrows():
-        sign = "+" if row["B"] >= 0 else ""
-        eq_parts.append(f"{sign}{row['B']:.4f}({row['Model']})")
-        sig_x = float(row["Sig."]) < 0.05
-        direction = "positive" if row["B"] > 0 else "negative"
-        interp_parts.append(
-            f"<b>{row['Model']}</b>: B = {row['B']:.4f}, Sig. = {float(row['Sig.']):.4f} "
-            f"→ {'significant' if sig_x else 'not significant'}, {direction} effect on {y_col}."
-        )
+    coef_disp = coefs.copy()
+    for col in ["B","Std. Error","t"]: coef_disp[col] = coef_disp[col].map("{:.4f}".format)
+    coef_disp["Beta"]  = coef_disp["Beta"].apply(lambda v: f"{v:.4f}" if v!="" else "-")
+    coef_disp["Sig."]  = coef_disp["Sig."].map(lambda v: f"{v:.4f} *" if float(v)<0.05 else f"{v:.4f}")
+    st.dataframe(coef_disp, use_container_width=True, hide_index=True)
+    st.caption("* Sig. < 0.05 — statistically significant")
 
+    const_val = float(coefs.loc[coefs["Model"]=="(Constant)","B"].values[0])
+    eq_parts  = [f"{const_val:.4f}"]
+    interp_parts = []
+    for _,row in coefs[coefs["Model"]!="(Constant)"].iterrows():
+        s = "+" if row["B"]>=0 else ""
+        eq_parts.append(f"{s}{row['B']:.4f}({row['Model']})")
+        sig_x = float(row["Sig."]) < 0.05
+        interp_parts.append(
+            f"<b>{row['Model']}</b>: B={row['B']:.4f}, β={fmt(row['Beta'])}, "
+            f"Sig.={float(row['Sig.']):.4f} → <b>{'significant' if sig_x else 'not significant'}</b>, "
+            f"{'positive' if row['B']>0 else 'negative'} effect on {y_col}.")
     eq_str = "Ŷ = " + " ".join(eq_parts)
     st.markdown(f'<div class="equation-box">{eq_str}</div>', unsafe_allow_html=True)
-
     st.markdown(f"""
     <div class="interp-box">
-    <b>Constant (a):</b> When all X = 0, predicted {y_col} = {const_val:.4f}.<br><br>
+    <b>Constant (a) = {const_val:.4f}:</b> predicted {y_col} when all X = 0.<br><br>
     {"<br>".join(interp_parts)}
-    </div>
-    """, unsafe_allow_html=True)
-
+    </div>""", unsafe_allow_html=True)
     st.markdown('<hr class="divider">', unsafe_allow_html=True)
 
-    # ── Regression plot ───────────────────────────────────────────────────
+    # Plot
     if reg_type == "Simple":
-        fig_reg = plot_regression_line(
-            X_df[x_cols[0]], y, x_cols[0], y_col,
-            reg_results["model"]
-        )
-        figs_bytes["regression"] = fig_to_bytes(fig_reg)
-        st.pyplot(fig_reg, use_container_width=True)
-        plt.close(fig_reg)
+        x_plot = X_df[x_cols[0]].values; y_plot = y.values
+        m_plot = sm.OLS(y_plot, sm.add_constant(x_plot)).fit()
+        fig_reg = plot_regression_line(x_plot, y_plot, x_cols[0], y_col, m_plot)
     else:
-        # For multiple: scatter of fitted vs actual
-        fig2, ax2 = plt.subplots(figsize=(7, 4))
-        style_ax(ax2, fig2)
-        ax2.scatter(fitted, y, color=GOLD, s=25, alpha=0.8, zorder=3)
-        mn = min(fitted.min(), y.min())
-        mx = max(fitted.max(), y.max())
-        ax2.plot([mn, mx], [mn, mx], color="#f0e6d3", linewidth=1.5,
-                 linestyle="--", label="Perfect fit line")
-        ax2.set_title("Observed vs Fitted Values", fontsize=11,
-                      color=LIGHT_TXT, fontfamily="serif")
-        ax2.set_xlabel("Fitted (Predicted) Values", color=MUTED_TXT, fontsize=9)
-        ax2.set_ylabel(f"Observed {y_col}", color=MUTED_TXT, fontsize=9)
-        ax2.legend(facecolor=CARD_BG, edgecolor="#2a2d3a",
-                   labelcolor=LIGHT_TXT, fontsize=8)
-        plt.tight_layout()
-        figs_bytes["regression"] = fig_to_bytes(fig2)
-        st.pyplot(fig2, use_container_width=True)
-        plt.close(fig2)
-
+        fig_reg = plot_obs_vs_fitted(fitted, y, y_col)
+    figs_bytes["regression"] = fig_to_bytes(fig_reg)
+    st.pyplot(fig_reg, use_container_width=True); plt.close(fig_reg)
     st.markdown('<hr class="divider">', unsafe_allow_html=True)
 
-    # ── Auto Conclusion ───────────────────────────────────────────────────
-    sec_num4 = 7 if reg_type == "Multiple" else 6
-    st.markdown(f'<div class="section-header">{sec_num4} · Interpretation & Conclusion</div>',
-                unsafe_allow_html=True)
-
-    lin_interp = " ".join([
-        f"The linearity test confirmed {'a linear' if lr['passed'] else 'no confirmed linear'} "
-        f"relationship between {xc} and {y_col} "
-        f"(Sig. Linearity = {lr['p_lin']:.4f}; "
-        f"Sig. Deviation = {lr['p_dev']:.4f if (lr['df_dev'] > 0 and not np.isnan(lr['p_dev'])) else 'N/A'})."
-        for xc, lr in lin_results.items()
-    ])
-
-    mc_sentence = ""
-    if reg_type == "Multiple" and vif_df is not None:
-        mc_p = all(vif_df["VIF"] < 10)
-        mc_sentence = (
-            f"No multicollinearity was detected among the predictors (all VIF < 10; all Tolerance > 0.10). "
-            if mc_p else
-            f"Multicollinearity was detected among the predictors. "
-        )
-
-    pred_sentences = " ".join([
-        f"{row['Model']} has a {'positive' if row['B'] > 0 else 'negative'} and "
-        f"{'significant' if float(row['Sig.']) < 0.05 else 'non-significant'} effect on {y_col} "
-        f"(B = {row['B']:.4f}, β = {fmt(row['Beta'])}, t = {row['t']:.4f}, Sig. = {float(row['Sig.']):.4f})."
-        for _, row in reg_results["coef_df"][reg_results["coef_df"]["Model"] != "(Constant)"].iterrows()
-    ])
-
-    conclusion_text = (
-        f"Prior to conducting the {'simple' if reg_type == 'Simple' else 'multiple'} linear regression analysis, "
+    # ── Conclusion ─────────────────────────────────────────────────────────
+    sec_c = 7 if reg_type=="Multiple" else 6
+    st.markdown(f'<div class="section-header">{sec_c} · Interpretation & Conclusion</div>', unsafe_allow_html=True)
+    lin_snts = " ".join(
+        f"Linearity {xc}→{y_col}: {'confirmed' if lr['passed'] else 'not confirmed'} (Sig. Linearity={fmt(lr['p_lin'])}; Sig. Deviation={fmt(lr.get('p_dev',np.nan))})."
+        for xc,lr in lin_results.items())
+    mc_snt = ""
+    if reg_type=="Multiple" and vif_df is not None:
+        mc_snt = ("No multicollinearity (all VIF < 10). " if all(vif_df["VIF"]<10)
+                  else "Multicollinearity detected. ")
+    pred_snts = " ".join(
+        f"{row['Model']}: B={row['B']:.4f}, β={fmt(row['Beta'])}, t={row['t']:.4f}, Sig.={float(row['Sig.']):.4f} "
+        f"→ {'significant' if float(row['Sig.'])<0.05 else 'not significant'}, "
+        f"{'positive' if row['B']>0 else 'negative'} effect on {y_col}."
+        for _,row in coefs[coefs["Model"]!="(Constant)"].iterrows())
+    conclusion = (
+        f"Prior to the {'simple' if reg_type=='Simple' else 'multiple'} linear regression analysis, "
         f"all prerequisite assumption tests were performed. "
-        f"The {norm_res['primary']} normality test showed that residuals are "
-        f"{'normally distributed' if norm_passed else 'not normally distributed'} "
-        f"(Sig. = {norm_res['primary_p']:.4f}). "
-        f"{lin_interp} "
-        f"{mc_sentence}"
-        f"The Glejser heteroscedasticity test indicated "
-        f"{'no heteroscedasticity (all Sig. > 0.05)' if glejser_passed else 'the presence of heteroscedasticity'}. "
-        f"The Durbin-Watson statistic (DW = {dw_value:.4f}) confirmed "
-        f"{'no autocorrelation' if dw_passed else 'the presence of autocorrelation'}. "
-        f"\n\n"
-        f"{'Simple' if reg_type == 'Simple' else 'Multiple'} linear regression results showed that the model is "
-        f"{'statistically significant' if sig_model else 'not statistically significant'} "
-        f"(F = {reg_results['F']:.4f}, Sig. = {reg_results['p_F']:.4f}). "
-        f"The coefficient of determination R² = {reg_results['R2']:.4f}, indicating that "
-        f"{r2_pct:.1f}% of the variance in {y_col} is explained by {', '.join(x_cols)}. "
-        f"The regression equation is: {eq_str}. "
-        f"{pred_sentences}"
-    )
-
-    st.markdown(f'<div class="interp-box" style="font-size:0.95rem;">{conclusion_text.replace(chr(10), "<br>")}</div>',
-                unsafe_allow_html=True)
-
+        f"The {norm_res['primary']} normality test: Sig. = {norm_res['primary_p']:.4f} "
+        f"({'satisfied' if norm_passed else 'violated'}). "
+        f"{lin_snts} {mc_snt}"
+        f"Glejser test: {'no heteroscedasticity' if glejser_passed else 'heteroscedasticity present'}. "
+        f"Durbin-Watson = {dw_value:.4f}: {'no autocorrelation' if dw_passed else 'autocorrelation detected'}.\n\n"
+        f"Regression: F = {reg_results['F']:.4f}, Sig. = {reg_results['p_F']:.4f} "
+        f"({'significant' if sig_model else 'not significant'}). "
+        f"R² = {reg_results['R2']:.4f} ({r2_pct:.1f}% variance in {y_col} explained). "
+        f"Equation: {eq_str}. {pred_snts}")
+    st.markdown(f'<div class="interp-box" style="font-size:0.94rem;line-height:1.8;">'
+                f'{conclusion.replace(chr(10),"<br><br>")}</div>', unsafe_allow_html=True)
     st.markdown('<hr class="divider">', unsafe_allow_html=True)
 
-    # ═════════════════════════════════════════════════════════════════════
-    # DOWNLOAD SECTION
-    # ═════════════════════════════════════════════════════════════════════
-    st.markdown('<div class="section-header">Download Report</div>',
-                unsafe_allow_html=True)
-
+    # ── Downloads ──────────────────────────────────────────────────────────
+    st.markdown('<div class="section-header">⬇ Download Report</div>', unsafe_allow_html=True)
     with st.spinner("Generating Word report…"):
         word_bytes = generate_word_report(
-            reg_type=reg_type,
-            y_col=y_col,
-            x_cols=x_cols,
-            norm_results=norm_res,
-            lin_results=lin_results,
-            vif_df=vif_df,
-            glejser_df=glejser_df,
-            glejser_passed=glejser_passed,
-            dw_value=dw_value,
-            reg_results=reg_results,
-            all_passed=all_passed,
-            figs_bytes=figs_bytes,
-        )
+            reg_type=reg_type, y_col=y_col, x_cols=x_cols,
+            norm_results=norm_res, lin_results=lin_results,
+            vif_df=vif_df, glejser_df=glejser_df,
+            glejser_passed=glejser_passed, dw_value=dw_value,
+            reg_results=reg_results, all_passed=all_passed,
+            figs_bytes=figs_bytes)
 
-    col_dl1, col_dl2 = st.columns(2)
-    with col_dl1:
-        st.download_button(
-            label="⬇ Download Word Report (.docx)",
-            data=word_bytes,
+    dl1, dl2 = st.columns(2)
+    with dl1:
+        st.download_button("⬇  Word Report (.docx)", data=word_bytes,
             file_name=f"regression_report_{y_col}.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            use_container_width=True,
-        )
+            use_container_width=True)
+    with dl2:
+        rows = []
+        for k,v in [("R",reg_results["R"]),("R Square",reg_results["R2"]),
+                    ("Adjusted R Square",reg_results["adj_R2"]),
+                    ("Std. Error",reg_results["se_est"]),("Durbin-Watson",reg_results["dw"])]:
+            rows.append({"Section":"MODEL SUMMARY","Item":k,"Value":f"{v:.4f}"})
+        rows += [{"Section":"ANOVA","Item":"F","Value":f"{reg_results['F']:.4f}"},
+                 {"Section":"ANOVA","Item":"Sig.","Value":f"{reg_results['p_F']:.4f}"}]
+        for _,row in coefs.iterrows():
+            rows.append({"Section":"COEFFICIENTS","Item":f"{row['Model']} B","Value":f"{row['B']:.4f}"})
+            rows.append({"Section":"COEFFICIENTS","Item":f"{row['Model']} Sig.","Value":f"{float(row['Sig.']):.4f}"})
+        csv_bytes = pd.DataFrame(rows).to_csv(index=False).encode("utf-8")
+        st.download_button("⬇  Results Summary (.csv)", data=csv_bytes,
+            file_name=f"regression_results_{y_col}.csv", mime="text/csv",
+            use_container_width=True)
 
-    with col_dl2:
-        # CSV of all results
-        all_results_rows = []
-        all_results_rows.append({"Section": "MODEL SUMMARY", "Item": "R",
-                                  "Value": f"{reg_results['R']:.4f}"})
-        all_results_rows.append({"Section": "MODEL SUMMARY", "Item": "R Square",
-                                  "Value": f"{reg_results['R2']:.4f}"})
-        all_results_rows.append({"Section": "MODEL SUMMARY", "Item": "Adjusted R Square",
-                                  "Value": f"{reg_results['adj_R2']:.4f}"})
-        all_results_rows.append({"Section": "MODEL SUMMARY", "Item": "Std. Error",
-                                  "Value": f"{reg_results['se_est']:.4f}"})
-        all_results_rows.append({"Section": "ANOVA", "Item": "F",
-                                  "Value": f"{reg_results['F']:.4f}"})
-        all_results_rows.append({"Section": "ANOVA", "Item": "Sig.",
-                                  "Value": f"{reg_results['p_F']:.4f}"})
-        for _, row in reg_results["coef_df"].iterrows():
-            all_results_rows.append({"Section": "COEFFICIENTS",
-                                      "Item": f"{row['Model']} B",
-                                      "Value": f"{row['B']:.4f}"})
-            all_results_rows.append({"Section": "COEFFICIENTS",
-                                      "Item": f"{row['Model']} Sig.",
-                                      "Value": f"{float(row['Sig.']):.4f}"})
-
-        csv_results = pd.DataFrame(all_results_rows).to_csv(index=False).encode("utf-8")
-        st.download_button(
-            label="⬇ Download Results Summary (.csv)",
-            data=csv_results,
-            file_name=f"regression_results_{y_col}.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-
-    st.markdown("""
-    <div style="text-align:center; color:#3a3a4a; font-size:0.78rem; padding: 2rem 0 1rem 0; font-family: 'DM Mono', monospace;">
-    Regression Analyzer · SPSS-equivalent formulas · statsmodels + scipy
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown('<div style="text-align:center;color:#aaa;font-size:0.76rem;padding:2rem 0 1rem 0;font-family:monospace;">Regression Analyzer · SPSS-equivalent · statsmodels + scipy</div>',
+                unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
