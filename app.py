@@ -119,7 +119,12 @@ def run_linearity(x_series, y_series):
              if (not np.isnan(F_dev) and df_dev > 0) else np.nan)
     passed = ((not np.isnan(p_lin) and p_lin < 0.05) and
               (np.isnan(p_dev) if np.isnan(p_dev) else p_dev > 0.05))
+    ms_between = ss_between / df_groups
+    F_between  = ms_between / ms_within if (ms_within and ms_within > 0) else np.nan
+    p_between  = float(1 - stats.f.cdf(F_between, df_groups, df_within)) if not np.isnan(F_between) else np.nan
     return {"ss_reg": ss_reg, "ss_dev": ss_dev, "ss_within": ss_within,
+            "ss_between": ss_between, "df_groups": df_groups,
+            "ms_between": ms_between, "F_between": F_between, "p_between": p_between,
             "df_lin": df_lin, "df_dev": df_dev, "df_within": df_within,
             "ms_lin": ms_lin, "ms_dev": ms_dev, "ms_within": ms_within,
             "F_lin": F_lin, "p_lin": p_lin, "F_dev": F_dev, "p_dev": p_dev,
@@ -595,7 +600,7 @@ def main():
         if not lr["passed"]: all_passed = False
         ss_comb = lr["ss_reg"] + (lr["ss_dev"] if not np.isnan(lr.get("ss_dev", np.nan)) else 0)
         lin_tbl = pd.DataFrame([
-            {"Source":"Between Groups (Combined)","SS":fmt(ss_comb),"df":"-","MS":"-","F":"-","Sig.":"-"},
+            {"Source":"Between Groups (Combined)","SS":fmt(ss_comb),"df":lr.get("df_groups","-"),"MS":fmt(lr.get("ms_between",np.nan)),"F":fmt(lr.get("F_between",np.nan)),"Sig.":fmt(lr.get("p_between",np.nan))},
             {"Source":"  Linearity","SS":fmt(lr["ss_reg"]),"df":lr["df_lin"],"MS":fmt(lr["ms_lin"]),"F":fmt(lr["F_lin"]),"Sig.":fmt(lr["p_lin"])},
             {"Source":"  Deviation from Linearity","SS":fmt(lr.get("ss_dev",np.nan)),"df":lr["df_dev"] if lr["df_dev"]>0 else "-","MS":fmt(lr.get("ms_dev",np.nan)),"F":fmt(lr.get("F_dev",np.nan)),"Sig.":fmt(lr.get("p_dev",np.nan))},
             {"Source":"Within Groups","SS":fmt(lr.get("ss_within",np.nan)),"df":lr["df_within"],"MS":fmt(lr.get("ms_within",np.nan)),"F":"-","Sig.":"-"},
