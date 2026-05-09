@@ -68,9 +68,8 @@ def run_normality(residuals):
     """
     n   = len(residuals)
     res = np.array(residuals, dtype=float)
-    res_std = (res - res.mean()) / res.std(ddof=1)
-    sw_stat, sw_p = shapiro(res_std)
-    ks_stat, ks_p = lilliefors(res_std, dist='norm', pvalmethod='approx')
+    sw_stat, sw_p = shapiro(res)
+    ks_stat, ks_p = lilliefors(res, dist='norm', pvalmethod='approx')
     primary       = "Shapiro-Wilk" if n <= 50 else "Kolmogorov-Smirnov"
     primary_stat  = sw_stat if n <= 50 else ks_stat
     primary_p     = sw_p    if n <= 50 else ks_p
