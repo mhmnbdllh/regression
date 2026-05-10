@@ -53,6 +53,11 @@ h3 { color:#1a1a2e !important; font-size:1.15rem !important; font-weight:600 !im
 h4 { color:#2a2a3e !important; }
 .stDownloadButton > button { background:#1a1a2e !important; color:#f8f7f4 !important; font-weight:600 !important; border:none !important; border-radius:8px !important; padding:0.55rem 1.5rem !important; }
 .stDownloadButton > button:hover { background:#2e2e50 !important; }
+
+a[href*="github.com"] { display: none !important; }
+[data-testid="stToolbar"] { display: none !important; }
+#MainMenu { visibility: hidden !important; }
+.stDeployButton { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
