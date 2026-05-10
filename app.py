@@ -35,6 +35,8 @@ html, body, [class*="css"], .stApp {
     background-color: #f8f7f4 !important;
     color: #1a1a2e !important;
 }
+st.markdown('<p class="main-title">Nama Aplikasi Anda</p>', unsafe_allow_html=True)
+st.markdown('<p class="main-subtitle">Deskripsi singkat aplikasi</p>', unsafe_allow_html=True)
 .main-title { font-family:'DM Serif Display',serif; font-size:2.8rem; color:#1a1a2e; letter-spacing:-1px; line-height:1.1; margin-bottom:0.2rem; }
 .main-subtitle { font-weight:400; color:#5a5a7a; font-size:1rem; margin-bottom:1.5rem; }
 .step-badge { display:inline-block; background:#e8e2d8; border:1px solid #c9b99a; color:#7a6a50; font-family:'DM Mono',monospace; font-size:0.72rem; padding:0.18rem 0.7rem; border-radius:20px; margin-bottom:0.4rem; letter-spacing:1.5px; text-transform:uppercase; }
