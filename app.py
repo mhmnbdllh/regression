@@ -59,7 +59,6 @@ a[href*="github.com"] { display: none !important; }
 #MainMenu { visibility: hidden !important; }
 .stDeployButton { display: none !important; }
 </style>
-<div class="custom-header">Regression Analyzer 📊</div>
 """, unsafe_allow_html=True)
 
 
